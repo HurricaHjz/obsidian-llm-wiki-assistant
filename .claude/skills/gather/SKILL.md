@@ -98,10 +98,15 @@ prose):
   `~/.llm-wiki/repos/` (outside the vault, disposable), select paths AFTER reading, then
   `pack-and-write` one immutable commit-pinned pack through capture_write (exit-verified,
   never a pipe; caps + fence escalation in the script; contract:
-  `wiki/developments/repo-pack-design.md`). The resolved file list with byte totals is the
+  `wiki/developments/repo-pack-design.md`; since 2026-09-07 also the project store's snapshot path:
+  `--repo` takes an absolute working-copy path, a dirty tree or a credential-bearing remote is refused,
+  `--allow-large` lifts the per-file cut, see `wiki/developments/project-store-design.md` D4). The resolved file list with byte totals is the
   consent gate for a pack, and its cost line uses actual pack bytes/4, not the per-page default.
 
-**Capture chain** (type-routed, then fallback — same as ingest Step 0): `defuddle` for web pages ·
+**Capture chain** (type-routed, then fallback — same as ingest Step 0, carve-out included): `defuddle`
+for web pages · **arXiv HTML / LaTeXML pages** (`arxiv.org/html/…`, ar5iv) never through defuddle —
+`curl -sL` the page to a temp file, then convert with `python3 -m markitdown`, exactly as ingest Step 0
+routes them, because defuddle's Markdown converter crashes on LaTeXML and silently emits raw HTML ·
 `curl` for raw/`.md` URLs · `markitdown` for binaries (PDF, Office, …) · repo study →
 `repo_pack.py` (see Scripts) · **Jina Reader** as the
 fallback when the routed engine fails (third-party routing — consented via the preflight, see the

@@ -186,7 +186,7 @@ done
 # ── PULL mode (repo → vault) ────────────────────────────────────────────────────────────────
 if [ "$WANT_PULL" = 1 ]; then
   REPO="$(cd "$REPO" && pwd)"
-  [ -d "$REPO/.git" ]      || { echo "ERROR: $REPO is not a git clone"; exit 1; }
+  [ -d "$REPO/.git" ]      || { echo "ERROR: $REPO is not a git clone — clone it first: git clone <repo-url> $REPO (RUNBOOK section D)"; exit 1; }
   [ -f "$REPO/CLAUDE.md" ] || { echo "ERROR: $REPO has no CLAUDE.md — not the framework repo"; exit 1; }
   echo "PULL ← $REPO   (your knowledge — wiki/ raw/ output/ + your assets media — and .obsidian config are never touched)"
   git -C "$REPO" pull --ff-only || { echo "ERROR: 'git pull' failed; resolve it in $REPO, then retry."; exit 1; }
@@ -239,7 +239,7 @@ fi
 # ── PUSH mode (vault → repo) ────────────────────────────────────────────────────────────────
 if [ "$WANT_PUSH" = 1 ]; then
   REPO="$(cd "$REPO" && pwd)"
-  [ -d "$REPO/.git" ] || { echo "ERROR: $REPO is not a git clone"; exit 1; }
+  [ -d "$REPO/.git" ] || { echo "ERROR: $REPO is not a git clone — clone it first: git clone <repo-url> $REPO (RUNBOOK section D)"; exit 1; }
   echo "PUSH → overlaying framework + packaging into $REPO (knowledge never copied; .git untouched)"
   copy_framework "$REPO"
   for d in "$REPO/.claude/skills"/*/; do            # repo-side dirs the vault retired (known-issues 2026-08-22)

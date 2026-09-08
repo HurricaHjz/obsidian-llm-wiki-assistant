@@ -14,18 +14,70 @@ identical rules instead of re-deriving an ad-hoc scanner. Rules encoded here:
     every attic target all resolve in the app);
   - media embeds ![[name.ext]] resolve against assets/ (the attachment folder) and are
     reported separately as dead embeds when missing — they are checked, not skipped;
+  - frontmatter `sources:` entries that name a vault path are resolved against disk and
+    reported separately as DANGLING SOURCES (provenance is a reference, not only prose);
   - prints scan totals as its own positive control (a zero-findings run with zero links
-    scanned is a broken probe, per CLAUDE.md §11).
+    scanned is a broken probe, per CLAUDE.md §11);
+  - refuses a root that is not a vault (no raw/ + wiki/): PROBE FAILED on stderr, exit 2.
 
 Usage (from the vault root):
-  python3 .claude/skills/lint/check-links.py [vault-root]   # exit 0 clean, 1 findings
+  python3 .claude/skills/lint/check-links.py [--vault ROOT] [ROOT]
+  exit 0 = clean · 1 = findings · 2 = broken premise
 """
 import os
 import re
 import sys
 import glob
 
-root = sys.argv[1] if len(sys.argv) > 1 else "."
+USAGE = "usage: check-links.py [--vault ROOT] [ROOT]   (exit 0 clean · 1 findings · 2 broken premise)"
+
+
+def probe_failed(message):
+    """One line on stderr, exit 2 — the fail-loud premise convention, so no caller reads a
+    refused run as a clean one."""
+    print(f"PROBE FAILED: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def parse_root(argv):
+    """Take the root from the sibling flag spelling or the historical positional form.
+
+    An unrecognised flag is refused, never swallowed as a root: `--vault X` used to set the
+    root to the literal string "--vault", so the scan opened nothing and still printed a
+    clean bill of health (known-issues 2026-09-06).
+    """
+    root, rest = None, list(argv)
+    while rest:
+        arg = rest.pop(0)
+        if arg in ("-h", "--help"):
+            print(USAGE)
+            raise SystemExit(0)
+        if arg == "--vault":
+            if not rest:
+                probe_failed("--vault needs a directory argument")
+            arg = rest.pop(0)
+        elif arg.startswith("--vault="):
+            arg = arg.split("=", 1)[1]
+        elif arg.startswith("-"):
+            probe_failed(f"unknown option {arg} ({USAGE})")
+        if root is not None:
+            probe_failed(f"two roots given ({root} and {arg})")
+        root = arg
+    return root if root else "."
+
+
+def assert_vault_root(candidate):
+    """A root must hold raw/ AND wiki/ or the scan refuses to run.
+
+    The 2026-08-26 standard closed for gather/capture_write.py: fail loud, never a wrong-tree
+    scan that reports a clean vault on a scan of nothing.
+    """
+    if not all(os.path.isdir(os.path.join(candidate, d)) for d in ("raw", "wiki")):
+        probe_failed(f"{candidate} is not a vault root (no raw/ or wiki/)")
+    return candidate
+
+
+root = assert_vault_root(parse_root(sys.argv[1:]))
 wiki = os.path.join(root, "wiki")
 
 MEDIA_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf", ".mp3", ".wav", ".mp4", ".mov"}
@@ -53,6 +105,91 @@ for _dir, _subdirs, _names in os.walk(root):
         if not _n.startswith("."):
             vault_basenames.add(_n.lower())
 
+# --- sources: provenance resolution -------------------------------------------------------
+# Classification of one `sources:` entry, in this order (the order matters: an email address
+# ends in a dot-extension, so the prose test has to run before the path test). The counts
+# beside each rule are what the live vault held when the rule was derived (1,256 entries on
+# 686 pages, measured 2026-09-07 with this same parser):
+#   url        a scheme form — never resolved against disk                              (54)
+#   annotated  the entry itself declares the file gone: "path (deleted 2026-08-13)"      (2)
+#   prose      provenance written as prose: "email: …", "session: …", "20 Aug 2026"     (10)
+#   path       contains "/" (1,177) or ends in a file extension, e.g. CLAUDE.md          (18)
+# Only `path` entries are resolved; everything else is counted so a zero is auditable.
+URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
+PROSE_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z ]{0,20}:\s")
+EXT_RE = re.compile(r"\.[A-Za-z0-9]{1,8}$")
+ANNOTATED_RE = re.compile(r"\((?:deleted|removed|archived|superseded)\b[^)]*\)\s*$", re.I)
+SOURCES_KEY_RE = re.compile(r"^sources:", re.M)
+
+
+def split_flow_list(text):
+    """Split a YAML flow list's body on commas OUTSIDE quotes.
+
+    A quoted path may carry commas — quoting is exactly the fix a page took for that on
+    2026-09-03 — and a naive split turns one live path into two or three fragments that then
+    read as dangling. Quote state is tracked so the fix is not punished.
+    """
+    out, buf, quote = [], "", ""
+    for ch in text:
+        if quote:
+            if ch == quote:
+                quote = ""
+            buf += ch
+        elif ch in "\"'":
+            quote = ch
+            buf += ch
+        elif ch == ",":
+            out.append(buf)
+            buf = ""
+        else:
+            buf += ch
+    out.append(buf)
+    return [v.strip() for v in out if v.strip()]
+
+
+def frontmatter_sources(block):
+    """Every `sources:` entry in one frontmatter block, in any of the three shapes the vault
+    writes: an inline flow list (possibly wrapped), a block list of `-` items, or a bare
+    scalar. Returns (entries, key_present)."""
+    if not SOURCES_KEY_RE.search(block):
+        return [], False
+    flow = re.search(r"^sources:[ \t]*\[(.*?)\]", block, re.M | re.S)
+    if flow:
+        return split_flow_list(flow.group(1)), True
+    listed = re.search(r"^sources:[ \t]*(?:#[^\n]*)?\n((?:[ \t]*-[ \t]*[^\n]+\n?)+)", block, re.M)
+    if listed:
+        return [v.strip() for v in re.findall(r"^[ \t]*-[ \t]*(.+?)[ \t]*$", listed.group(1), re.M)
+                if v.strip()], True
+    scalar = re.search(r"^sources:[ \t]+([^\[\n#][^\n]*)$", block, re.M)
+    if scalar and scalar.group(1).strip():
+        return [scalar.group(1).strip()], True
+    return [], True                    # `sources:` with an empty or `[]` value: parsed, no entries
+
+
+def classify_source(entry):
+    """Return (kind, cleaned) for one entry; kind is url · annotated · prose · path."""
+    text = entry.strip()
+    if len(text) > 1 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    else:
+        text = text.strip("\"'").strip()
+    if not text:
+        return "prose", text
+    if URL_RE.match(text):
+        return "url", text
+    if ANNOTATED_RE.search(text):
+        return "annotated", text
+    if PROSE_KEY_RE.match(text):
+        return "prose", text
+    if "/" in text or EXT_RE.search(text):
+        return "path", text
+    return "prose", text
+
+
+source_pages = source_entries = 0
+source_paths = source_urls = source_prose = 0
+dangling_sources, annotated_sources, unparsed_sources = [], [], []
+
 aliases = {}
 for p in files:
     head = read_text(p)   # full read — a byte-capped head can silently drop aliases past the cap (§12: a bound needs stated headroom; the link pass re-reads every file in full anyway)
@@ -60,6 +197,25 @@ for p in files:
     if not fm:
         continue
     block = fm.group(1)
+    entries, key_present = frontmatter_sources(block)
+    if key_present:
+        source_pages += 1
+        rel_page = os.path.relpath(p, root)
+        if not entries:
+            unparsed_sources.append(rel_page)
+        for entry in entries:
+            source_entries += 1
+            kind, value = classify_source(entry)
+            if kind == "url":
+                source_urls += 1
+            elif kind == "prose":
+                source_prose += 1
+            elif kind == "annotated":
+                annotated_sources.append(f"{rel_page} · {value}")
+            else:
+                source_paths += 1
+                if not os.path.exists(os.path.join(root, value)):
+                    dangling_sources.append(f"{rel_page} · {value}")
     m = re.search(r"^aliases:\s*\[([^\]]*)\]", block, re.M)
     vals = []
     if m:
@@ -128,4 +284,16 @@ for d in dead_links:
 print(f"DEAD EMBEDS: {len(dead_embeds)}")
 for d in dead_embeds:
     print("  " + d)
-sys.exit(1 if (dead_links or dead_embeds) else 0)
+print(f"SOURCES SCANNED: {source_pages} pages carry sources: | {source_entries} entries "
+      f"| {source_paths} vault paths resolved | {source_urls} URLs | {source_prose} prose "
+      f"| {len(annotated_sources)} annotated absences | {len(unparsed_sources)} empty or unparsed"
+      "   (nonzero totals = the sources arm ran)")
+print(f"DANGLING SOURCES: {len(dangling_sources)}")
+for d in dangling_sources:
+    print("  " + d)
+# Neither list is a finding: an annotated entry declares its own absence, and an empty
+# `sources:` carries nothing to resolve. Both are printed so nothing is silently skipped.
+for label, items in (("annotated absence", annotated_sources), ("empty or unparsed sources", unparsed_sources)):
+    for d in items:
+        print(f"  ({label}) {d}")
+sys.exit(1 if (dead_links or dead_embeds or dangling_sources) else 0)

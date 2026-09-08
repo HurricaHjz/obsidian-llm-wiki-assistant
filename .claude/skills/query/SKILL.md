@@ -3,7 +3,7 @@ name: query
 description: >
   Answer questions against the local Obsidian wiki — not from model memory. Use when the user runs
   /query, or asks in natural language about "my notes / my wiki / what I've researched / my past
-  decisions / what do I know about X". Always read wiki/index.md FIRST to locate pages, then read
+  decisions / what do I know about X". Always read wiki/index.md FIRST and WHOLE to locate pages, then read
   them in full, then answer with [[wikilink]] citations. If the wiki has nothing relevant, say so
   explicitly before giving any general-knowledge answer. Offers to file high-value answers back
   into wiki/syntheses/ so explorations compound.
@@ -36,7 +36,11 @@ One question can.)
 ## Pipeline
 
 ### Step 1 — Read the global index (always first)
-Read `wiki/index.md` and locate candidate pages across **Sources / Entities / Concepts / Syntheses**.
+Read `wiki/index.md` **whole** — `route` mode, CLAUDE.md §5 — and locate candidate pages across **every**
+`## ` section. Do not scope the read to a few sections: the four this step once named (Sources, Entities,
+Concepts, Syntheses) hold 79 of the 111 pages real syntheses turned out to cite, so the other six carried
+29 % of the answer (wiki/developments/registry-read-policy.md, 2026-09-06). Grepping the index instead of reading it finds
+49 % of them.
 
 ### Step 2 — Deep-read the targets (triage by confidence)
 Open the most relevant pages in full with the read tool (or `obsidian-cli`). Follow `## Related`

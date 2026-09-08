@@ -80,6 +80,7 @@ reset_dir /tmp/b6-parity-suite
 make_dir /tmp/b6-parity-suite/arm-one
 make_dir /tmp/b6-parity-suite/arm-two
 make_dir /tmp/b6-parity-suite/vault/wiki
+make_dir /tmp/b6-parity-suite/vault/raw     # the lint root guard (2026-09-07) wants raw/ beside wiki/
 make_dir /tmp/b6-parity-suite/vault/.claude/skills/demo
 make_dir /tmp/b6-parity-suite/vault/.claude/agents
 make_dir /tmp/b6-parity-suite/emptylint
@@ -306,11 +307,17 @@ print('caught' if not path.endswith('truth.md') else 'missed')
 ")
 if [ "$badctl" = caught ]; then ok "the same check catches a planted trailing clause (positive control)"; else no "the control-line check passed a planted trailing clause"; fi
 # The pin itself: the wrapper's own parser, run for real on the generated brief. A dry run spawns
-# nothing and writes nothing (it prints what it would write).
+# nothing and writes nothing (it prints what it would write). `--reason` is required at every spawn,
+# dry runs included, and is checked before any record line, so an omitted one refuses with exit 2
+# and this leg's parser is never reached (2026-09-07). The letter is (a) independence because the
+# parity judge is a blind lane: it is the instrument rule this spawn is opened under, not a token
+# added to satisfy the wrapper, and the leg's intent — the wrapper's own control parser run on the
+# generated brief — is unchanged.
 if [ -f "$LANE" ]; then
   PYTHONDONTWRITEBYTECODE=1 python3 -B "$LANE" spawn --dry-run --run run-x --lane J1 \
     --class critic --brief "$B" --grant /tmp/b6-parity-suite/fx/fixture \
     --grant /tmp/b6-parity-suite/tr --grants-only --delegation single --delegation-src head \
+    --reason "(a) independence: the parity judge scores the fixture blind to its arm" \
     > /tmp/b6-parity-suite/dry.txt 2>&1
   dry=$?
   if [ "$dry" -eq 0 ]; then ok "the spawn wrapper accepts the brief on a dry run (exit 0)"; else no "the spawn wrapper refused the brief (exit $dry)"; fi

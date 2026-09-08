@@ -369,6 +369,18 @@ def load_verdicts(path, root):
     return records, unresolved
 
 
+def assert_vault_root(root):
+    """A root must hold raw/ AND wiki/ or the audit refuses to run.
+
+    The 2026-08-26 standard, closed for the capture layer and swept here on 2026-09-07: fail
+    loud on stderr, never a wrong-tree scan that reports a clean vault on a scan of nothing.
+    """
+    if not all(os.path.isdir(os.path.join(root, d)) for d in ("raw", "wiki")):
+        print(f"PROBE FAILED: {root} is not a vault root (no raw/ or wiki/)", file=sys.stderr)
+        raise SystemExit(2)
+    return root
+
+
 def main():
     stdout_utf8()
     ap = argparse.ArgumentParser(description="Confidence type-cap and boundary checker.")
@@ -409,8 +421,9 @@ def main():
             return 2
     else:
         mode = "vault"
+        root = assert_vault_root(root)     # vault mode only: --verdicts names its own pages
         wiki = os.path.join(root, "wiki")
-        if not os.path.isdir(wiki):
+        if not os.path.isdir(wiki):        # unreachable while the root guard runs first
             print(f"PROBE FAILED: no wiki directory under {args.vault}")
             return 2
         pages = sorted(glob.glob(os.path.join(wiki, "**", "*.md"), recursive=True))

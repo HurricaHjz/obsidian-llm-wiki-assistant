@@ -10,10 +10,40 @@
 # Never reports clean on a broken probe: an empty listing or a missing positive control is a FAILURE,
 # not a pass (CLAUDE.md §11).
 #
-# Usage: sh .claude/skills/lint/check-qmd-registry.sh [vault-root] [collection]
-#   exit 0 = clean or n/a · exit 1 = finding or broken probe
-ROOT="${1:-.}"
-COLL="${2:-wiki}"
+# Usage: sh .claude/skills/lint/check-qmd-registry.sh [--vault ROOT] [vault-root] [collection]
+#   exit 0 = clean or n/a · exit 1 = finding or broken probe · exit 2 = the root is not a vault
+#
+# Root guard (the 2026-08-26 standard, swept across this directory 2026-09-07): the root must
+# hold raw/ AND wiki/, or the run refuses on stderr with exit 2 rather than reporting on a tree
+# it was never pointed at (the .qmd-off opt-out is read from this root, so a wrong root silently
+# ignores a disabled collection). Exit 2 is the cross-script guard code; the script's own
+# premise failures keep their exit 1. --vault is accepted for parity with the sibling scripts;
+# an unknown option is refused rather than read as the root.
+USAGE="usage: check-qmd-registry.sh [--vault ROOT] [vault-root] [collection]"
+ROOT=""
+COLL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --vault)
+      shift
+      [ $# -gt 0 ] || { echo "PROBE FAILED: --vault needs a directory argument" >&2; exit 2; }
+      ROOT="$1" ;;
+    --vault=*) ROOT="${1#--vault=}" ;;
+    -*) echo "PROBE FAILED: unknown option $1 ($USAGE)" >&2; exit 2 ;;
+    *)
+      if [ -z "$ROOT" ]; then ROOT="$1"
+      elif [ -z "$COLL" ]; then COLL="$1"
+      else echo "PROBE FAILED: too many arguments ($USAGE)" >&2; exit 2; fi ;;
+  esac
+  shift
+done
+ROOT="${ROOT:-.}"
+COLL="${COLL:-wiki}"
+
+if [ ! -d "$ROOT/raw" ] || [ ! -d "$ROOT/wiki" ]; then
+  echo "PROBE FAILED: $ROOT is not a vault root (no raw/ or wiki/)" >&2
+  exit 2
+fi
 
 command -v qmd >/dev/null 2>&1 || { echo "qmd-registry: n/a (qmd not installed)"; exit 0; }
 [ -e "$ROOT/.qmd-off" ] && { echo "qmd-registry: n/a (qmd disabled by .qmd-off)"; exit 0; }

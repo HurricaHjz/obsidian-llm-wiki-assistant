@@ -29,15 +29,16 @@ Call sites — one implementation, two callers, so they cannot drift:
   lint SKILL.md Step 2g (routine, edit time) · the publish gate's test suite, leg 14 (publish).
 Regression fixtures: test_check_shipped_links.sh beside this file (run with bash).
 
-Usage: python3 check-shipped-links.py [VAULT_ROOT]      (default: three levels above this file)
+Usage: python3 check-shipped-links.py [--vault ROOT] [VAULT_ROOT]  (default: three levels above this file)
 Prints ONE summary line for the lint report, then one "  <file> → [[target]]" line per finding:
   shipped-links: clean (control OK: N surfaces, M wikilinks seen, P wiki pages + aliases = Q names,
                         S shipping names excluded, U targets resolving nowhere here, self-control fired)
   shipped-links: n/a (wiki/ present but empty — no vault-only page can be linked)
   shipped-links: K dead in the published copy (control OK: …)
   shipped-links: PROBE FAILED — <reason>
-Exit 0 clean or n/a · 1 findings · 2 PROBE FAILED. Premise failures never read as clean: no wiki/
-directory (wrong root) → 2; no shipped surfaces → 2; an unreadable or undecodable surface → 2; the
+Exit 0 clean or n/a · 1 findings · 2 PROBE FAILED. Premise failures never read as clean: a root
+that is not a vault, i.e. no raw/ + wiki/ (the 2026-08-26 standard, on stderr) → 2; an unknown
+option → 2; no shipped surfaces → 2; an unreadable or undecodable surface → 2; the
 matcher's self-control (a synthetic surface linking a synthetic page must be caught) silent → 2. An EMPTY
 wiki/ is legitimate absence (a fresh install, the published copy itself) → n/a, exit 0.
 Design record: wiki/developments/shipped-surface-wikilink-guard.md
@@ -99,11 +100,52 @@ def stem(path):
     return os.path.splitext(os.path.basename(path))[0].casefold()
 
 
+def parse_root(argv):
+    """The sibling flag spelling or the historical positional form; anything else is refused.
+
+    A swallowed flag is how a wrong root goes unnoticed: `--vault X` taken as the root scans a
+    directory that does not exist and the run reads as a premise failure at best, clean at worst.
+    """
+    given = None
+    rest = list(argv[1:])
+    while rest:
+        arg = rest.pop(0)
+        if arg in ("-h", "--help"):
+            print("usage: check-shipped-links.py [--vault ROOT] [ROOT]")
+            raise SystemExit(0)
+        if arg == "--vault":
+            if not rest:
+                print("PROBE FAILED: --vault needs a directory argument", file=sys.stderr)
+                raise SystemExit(2)
+            arg = rest.pop(0)
+        elif arg.startswith("--vault="):
+            arg = arg.split("=", 1)[1]
+        elif arg.startswith("-"):
+            print(f"PROBE FAILED: unknown option {arg} (usage: [--vault ROOT] [ROOT])", file=sys.stderr)
+            raise SystemExit(2)
+        if given is not None:
+            print(f"PROBE FAILED: two roots given ({given} and {arg})", file=sys.stderr)
+            raise SystemExit(2)
+        given = arg
+    return given
+
+
+def assert_vault_root(root):
+    """A root must hold raw/ AND wiki/ or the check refuses to run (2026-08-26 standard):
+    fail loud on stderr, never a wrong-tree scan reported as clean."""
+    if not all(os.path.isdir(os.path.join(root, d)) for d in ("raw", "wiki")):
+        print(f"PROBE FAILED: {root} is not a vault root (no raw/ or wiki/)", file=sys.stderr)
+        raise SystemExit(2)
+    return root
+
+
 def main(argv):
     here = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.abspath(argv[1]) if len(argv) > 1 else os.path.abspath(os.path.join(here, "..", "..", ".."))
+    given = parse_root(argv)
+    root = os.path.abspath(given) if given else os.path.abspath(os.path.join(here, "..", "..", ".."))
+    assert_vault_root(root)
     wiki = os.path.join(root, "wiki")
-    if not os.path.isdir(wiki):
+    if not os.path.isdir(wiki):    # unreachable while the root guard runs first; kept as depth
         print(f"shipped-links: PROBE FAILED — no wiki/ under {root} (wrong vault root?)")
         return 2
     skills = os.path.join(root, ".claude", "skills")

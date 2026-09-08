@@ -10,7 +10,30 @@ one of them against an asserted anchor, prints one line, and refuses rather than
   register add      insert one entry at the top of `## Open` in
                     `wiki/developments/known-issues.md`.
   register close    move one `## Open` entry to the top of `## Closed`, dating its Status.
-  ideas annotate    append ` *(agent DATE: NOTE)*` to one numbered IDEAS bullet.
+  ideas annotate    append ` *(agent DATE TIME: NOTE)*` to one numbered IDEAS bullet.
+
+The clock, and why it is not an argument
+
+  A time of day written by hand is written from a sense of elapsed time, and seven such
+  stamps reached five surfaces in one session before anything compared one to a clock. So
+  every stamp below is read from the clock at the moment of the write and from nowhere
+  else — no `--time` argument exists to be guessed into:
+
+    register add     `### [DATE HH:MM] SURFACE — TITLE (SEVERITY)`, the date from `--date`.
+    register close   the status fact as `closed DATE HH:MM — …`: the time is inserted after
+                     the date the caller's `--status` already opens with (`closed DATE …`),
+                     and otherwise the whole stamp is prefixed to the caller's text.
+    ideas annotate   `*(agent DATE HH:MM: NOTE)*`.
+    log-append       one further bullet, `- **Clock**: HH:MM ZONE`, written through the
+                     `--extra` path between Changed and Conflicts. The `## [DATE] ACTION |
+                     TITLE` heading is a schema surface and is not touched.
+
+  The zone is the clock's own (`%Z`), never a literal. And because a caller's free text may
+  still name a time, every text argument is scanned for an `H:MM`, `HH:MM` or `HH:Mx` token
+  whose hour disagrees with the clock's: each such token prints one line on stderr,
+  `clock: the note names TOKEN, the clock reads HH:MM`. It is a warning and never a
+  refusal — a note may legitimately cite a past event — so the write proceeds either way,
+  and `--dry-run` prints the same warnings.
 
 The contract every verb keeps
 
@@ -35,14 +58,15 @@ The contract every verb keeps
 
 Formats, and where they come from
 
-  The log entry is `## [DATE] ACTION | TITLE`, then `- **Changed**: …`, then any `--extra`
-  bullets in the order given, then `- **Conflicts**: …`, then a blank line — the shape the
-  file own recent entries carry, Changed first and Conflicts last.
+  The log entry is `## [DATE] ACTION | TITLE`, then `- **Changed**: …`, then the `Clock`
+  bullet and any `--extra` bullets in the order given, then `- **Conflicts**: …`, then a
+  blank line — the shape the file own recent entries carry, Changed first and Conflicts last.
   The register entry is the format the register documents above its own `## Open` heading:
   severity in the heading, then `- **Where observed**`, `- **Symptom**`,
-  `- **Suspected cause**`, `- **Status**`. `--status` is written verbatim, so the caller
-  owns the whole string (`open — fix shape: …`); `--where` is optional and its bullet is
-  omitted when it is absent rather than filled with invented text.
+  `- **Suspected cause**`, `- **Status**`. `--status` is the caller's own words, prefixed on
+  a close by the clock stamp above and otherwise untouched (`open — fix shape: …`);
+  `--where` is optional and its bullet is omitted when it is absent rather than filled with
+  invented text.
   `register close` finds the Status line of the entry by the `**Status**` marker, so it dates both
   forms in live use: a `- **Status**: …` bullet, and a `- **Severity**: … **Status**: …`
   line.
@@ -66,6 +90,7 @@ import re
 import stat
 import sys
 import tempfile
+import time
 
 # The vocabulary the log itself uses of entry kinds; anything else is a typo, never a new kind.
 ACTIONS = ("ingest", "gather", "synthesis", "lint", "deep-lint", "framework",
@@ -87,6 +112,27 @@ ENTRY_END_RE = re.compile(r"^#{1,6} ")  # any ATX heading ends the entry above i
 CHUNK = 65536                           # the log newline count reads this much at a time
 PREVIEW_MAX = 6                         # `--dry-run` prints at most this many `| ` lines
 SHORT = 70                              # an error line quotes at most this much of a line
+
+# A clock token as the register and the notes actually write one: a one- or two-digit hour,
+# a colon, then two digits or the rounded `Mx` form the register uses ("filed 21:3x BST").
+# The lookarounds keep the seconds of `19:52:29` from reading as a second token (`52:29`)
+# and keep a token out of a longer word; an hour above 23 is not a time and is skipped.
+CLOCK_TOKEN_RE = re.compile(r"(?<![0-9A-Za-z:])([0-9]{1,2}):([0-9][0-9x])(?![0-9A-Za-z])")
+HOUR_MAX = 23
+HOURS = 24
+# The grace: the previous hour passes while the clock's minute is under ten — a note written
+# just after the turn of the hour about the minute before it. Ten is set by judgement,
+# unmeasured; the failure it forgives (a stamp one minute stale) is smaller than the one it
+# would otherwise report, and no count of real notes was taken to choose it.
+GRACE_MINUTES = 10
+# The status fact `register close` writes, and the two shapes a caller's own `--status` may
+# already carry: `closed DATE …` takes the time after its date, `closed DATE HH:MM …` is
+# already stamped and is left exactly as it came.
+# The already-stamped shape admits the rounded `HH:Mx` minute as well as `HH:MM`, so a
+# caller who wrote one keeps it verbatim rather than collecting a second time beside it;
+# whether that time agrees with the clock is the token check's business, not this one's.
+CLOSED_DATED_RE = re.compile(r"^closed\s+\d{4}-\d{2}-\d{2}")
+CLOSED_TIMED_RE = re.compile(r"^closed\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:[0-9][0-9x]")
 
 
 def die(verb, reason):
@@ -123,6 +169,74 @@ def check_date(verb, value):
     except ValueError:
         die(verb, "--date %s is not a real date" % value)
     return value
+
+
+# ----------------------------------------------------------------------- clock ---------
+
+def clock_now():
+    """The wall clock, read once per run so every stamp of one write agrees with the rest."""
+    return time.localtime()
+
+
+def clock_hm(now):
+    """The stamp itself: `HH:MM`, zero-padded, local time — the only source of a time here."""
+    return time.strftime("%H:%M", now)
+
+
+def clock_zone(now):
+    """The clock's own zone name. `%z` (+0100) stands in where a host reports no name."""
+    return time.strftime("%Z", now) or time.strftime("%z", now)
+
+
+def hour_disagrees(token_hour, clock_hour, clock_minute):
+    """Whether a token hour is neither the clock's own nor the previous one under the grace."""
+    if token_hour == clock_hour:
+        return False
+    if clock_minute < GRACE_MINUTES and token_hour == (clock_hour - 1) % HOURS:
+        return False
+    return True
+
+
+def clock_tokens(now, values):
+    """Every distinct clock token in the caller's text whose hour disagrees, in reading order.
+
+    Distinct, because one token repeated across two arguments is one mistake and earns one
+    line; the order is the order the arguments are listed by the verb that collected them."""
+    offenders = []
+    for value in values:
+        if not value:
+            continue
+        for found in CLOCK_TOKEN_RE.finditer(value):
+            hour = int(found.group(1))
+            if hour > HOUR_MAX:
+                continue                # 52 of `19:52:29` is not an hour; nor is 99
+            if not hour_disagrees(hour, now.tm_hour, now.tm_min):
+                continue
+            if found.group(0) not in offenders:
+                offenders.append(found.group(0))
+    return offenders
+
+
+def warn_clock(now, values):
+    """One stderr line per offending token. A warning: a note may cite a past event, so the
+    write goes ahead, and stdout keeps the one line a head reads."""
+    reading = clock_hm(now)
+    for token in clock_tokens(now, values):
+        sys.stderr.write("clock: the note names %s, the clock reads %s\n" % (token, reading))
+
+
+def stamped_status(status, date, hm):
+    """The `register close` status fact, stamped: `closed DATE HH:MM — …`.
+
+    A caller who already opened with `closed DATE` gets the time inserted after that date
+    rather than a second `closed`; one who already carries a time keeps it (the token check
+    is what says whether that time agrees with the clock); anything else is prefixed whole."""
+    if CLOSED_TIMED_RE.match(status):
+        return status
+    dated = CLOSED_DATED_RE.match(status)
+    if dated:
+        return "%s %s%s" % (status[:dated.end()], hm, status[dated.end():])
+    return "closed %s %s — %s" % (date, hm, status)
 
 
 def read_text(verb, path):
@@ -243,6 +357,13 @@ def cmd_log_append(args):
     if not os.path.isfile(path):
         die(verb, "no file at %s" % path)
 
+    now = clock_now()
+    warn_clock(now, [title, changed, conflicts] + [raw for raw in args.extra or []])
+    # The heading shape is a schema surface and stays `## [DATE] ACTION | TITLE`, so the time
+    # rides in a bullet instead — first among the extras, where it sits under the heading's
+    # own date and does not move when the caller passes more of them.
+    extras.insert(0, ("Clock", "%s %s" % (clock_hm(now), clock_zone(now))))
+
     block = ["## [%s] %s | %s" % (date, args.action, title),
              "- **Changed**: %s" % changed]
     for key, value in extras:
@@ -316,10 +437,13 @@ def cmd_register_add(args):
     if args.severity not in SEVERITIES:
         die(verb, "--severity '%s' is none of: %s" % (args.severity, " ".join(SEVERITIES)))
 
+    now = clock_now()
+    warn_clock(now, [surface, symptom, cause, status, where])
+
     lines = register_lines(verb, path)
     open_at, _ = register_anchors(verb, lines)
 
-    block = ["### [%s] %s (%s)" % (date, surface, args.severity)]
+    block = ["### [%s %s] %s (%s)" % (date, clock_hm(now), surface, args.severity)]
     if where:
         block.append("- **Where observed**: %s" % where)
     block.append("- **Symptom**: %s" % symptom)
@@ -340,6 +464,12 @@ def cmd_register_close(args):
     date = check_date(verb, args.date)
     match = check_text(verb, "--match", args.match)
     status = check_text(verb, "--status", args.status)
+
+    now = clock_now()
+    # `--match` is a locator, not text this write lands: an entry already headed with a time
+    # is addressed by that time, and warning about it would be warning about the register.
+    warn_clock(now, [status])
+    status = stamped_status(status, date, clock_hm(now))
 
     lines = register_lines(verb, path)
     open_at, closed_at = register_anchors(verb, lines)
@@ -386,6 +516,9 @@ def cmd_ideas_annotate(args):
     note = check_text(verb, "--note", args.note)
     date = check_date(verb, args.date)
 
+    now = clock_now()
+    warn_clock(now, [note])
+
     lines = read_text(verb, path).split("\n")
     marker = "- **%s%s**" % (NUMERO, args.item)
     hits = [i for i, line in enumerate(lines) if line.startswith(marker)]
@@ -393,7 +526,9 @@ def cmd_ideas_annotate(args):
         die(verb, "'%s' begins %d lines of %s, not 1" % (marker, len(hits), path))
     at = hits[0]
     tail = line_terminator(lines[at])
-    lines[at] = "%s *(agent %s: %s)*%s" % (lines[at].rstrip(), date, note, tail)
+    # The note shape IDEAS.md's own HOW TO USE comment prescribes — a one-line `(agent)`
+    # annotation appended to the bullet — with the clock's time beside the date.
+    lines[at] = "%s *(agent %s %s: %s)*%s" % (lines[at].rstrip(), date, clock_hm(now), note, tail)
 
     preview = [short(lines[at])]
     if args.dry_run:
@@ -440,7 +575,8 @@ def build_parser():
     close.add_argument("--vault", required=True)
     close.add_argument("--match", required=True, help="text of exactly one Open heading")
     close.add_argument("--date", required=True)
-    close.add_argument("--status", required=True, help="the text of the dated line")
+    close.add_argument("--status", required=True,
+                       help="the text of the dated line; the clock stamps its time")
     close.add_argument("--dry-run", action="store_true", help="print the change, write nothing")
 
     ideas = verbs.add_parser("ideas", help="the scratchpad of the owner")

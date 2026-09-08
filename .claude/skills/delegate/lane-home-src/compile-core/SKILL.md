@@ -80,7 +80,7 @@ audited: <YYYY-MM-DD>   # today — assignment with the source in context is the
 tags: [topic]
 sources: [raw/2-papers/report.md, raw/2-papers/report.pdf]   # converted .md AND original; one entry if native .md or URL
 source_url: "<original web URL if a clip — else omit>"        # de-dup
-source_hash: "<sha256 prefix of the raw file>"                # de-dup
+source_hash: "<first 16 hex chars of the raw file's sha256>"   # de-dup — the length the pre-flight greps
 created: <YYYY-MM-DD>
 updated: <YYYY-MM-DD>
 ---
@@ -173,7 +173,7 @@ Add the links the source warrants, and only the pages the schema warrants.
   for the link to be warranted (schema §4.5; G3-thin attempt 1, 2026-09-04: both thin arms missed it).
 - **Reuse, never duplicate.** Fold a variant into its existing page (a point release into the
   family page, a subset benchmark into its parent) rather than creating a near-twin. Canonicalise
-  every name against `wiki/index.md` before you write it.
+  every name against `wiki/index.md` in `name` mode (`grep -o '^- \[\[[^]|]*' wiki/index.md | sed 's/^- \[\[//'`, ≈18 kB) before you write it — never a whole read.
 - **A page exists** → read it and merge incrementally. Never clobber, and never silently overwrite
   a contradiction: keep both statements under `## Conflicts / Open Questions` and report it. A
   conflict never pauses you.

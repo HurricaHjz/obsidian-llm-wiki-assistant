@@ -42,7 +42,9 @@ truth:** deliverable defaults live *only* in that Customisation section — re-r
 never copy its values into this skill, any config, or the deliverable itself (beyond applying them).
 
 ### Step 2 — Ground in the wiki (read first, like `query`)
-Read `wiki/index.md`, then deep-read the relevant pages (follow `## Related` one hop). Collect the
+Read `wiki/index.md` **whole**, across every `## ` section (`route` mode, CLAUDE.md §5 — a grep over the
+index finds 49 % of the pages real syntheses cited, the measured stand-in for what a deliverable needs), then deep-read the relevant pages (follow `## Related`
+one hop, which widens a shortlist route already produced and never replaces it). Collect the
 facts you will use **together with the page each comes from** (for citation). The deliverable is built
 from compiled knowledge — *not guessed*. Consult `wiki/user/` for personal context when the deliverable
 is about, or for, the owner. **Triage by `confidence` as `query` does**: lean on `authoritative`/`high`

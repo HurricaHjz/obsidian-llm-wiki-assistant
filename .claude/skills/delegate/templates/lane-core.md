@@ -80,12 +80,17 @@ SHELL
 - A piped exit code reports the last stage only. Drop the pipe where the exit code is the
   verification, or read the pipe array: `$pipestatus` (lowercase) in zsh, `PIPESTATUS` in bash and
   `sh` scripts — the other is empty in each.
-- Inside any single call expected to run longer than a few minutes (a suite, a long conversion), keep a
-  liveness file warm so the head's watchdog can tell work from a stall: run the work in the background and
-  touch your progress file every 30 s while it runs — `$LLM_WIKI_LANE_PROGRESS`, i.e.
-  `/tmp/<run>-<lane>.progress` — without shell redirection, which the fence denies on every lane:
+- Your process is your session: a job left in the background survives neither the end of your turn
+  nor a stop, and its partial output is no result (three suites lost that way, 2026-09-06). Inside any
+  single call expected to run longer than a few minutes (a suite, a long conversion), wait in the
+  foreground — a blocking loop or watch inside the call — and keep a liveness file warm so the head's
+  watchdog can tell work from a stall: start the work as a job and touch your progress file every 30 s
+  until it exits — `$LLM_WIKI_LANE_PROGRESS`, i.e. `/tmp/<run>-<lane>.progress` — without shell
+  redirection, which the fence denies on every lane:
   `(cmd) & while kill -0 $!; do python3 -c 'import os,time; open(os.environ["LLM_WIKI_LANE_PROGRESS"],"a").write(time.ctime()+chr(10))'; sleep 30; done`
   (design: the hands-off mode's watchdog, 2026-09-05; the transcript is silent for the whole call).
+  Write your report only with the result in hand; after a resume, re-run whatever was running when
+  you stopped.
 - Quote any bare word that starts with `=` (`echo '==='`): unquoted, zsh expands it and abandons
   the rest of the command list, silently skipping every probe after it.
 - Single-quote literal JSON and `printf` payloads. Inside double quotes a `$2`-style token

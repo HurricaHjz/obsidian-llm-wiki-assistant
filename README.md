@@ -1,6 +1,6 @@
-# obsidian-llm-wiki-assistant
+# Second Yourself
 
-**A personal assistant that remembers you, and a second brain that maintains itself.**
+**Second yourself. An AI that remembers you, on an Obsidian wiki that maintains itself.**
 
 > *Tony Stark never had to reintroduce himself to Jarvis. With today's AI you do it every day: close the chat, and everything you explained is gone.*
 
@@ -8,11 +8,13 @@
 
 The problem is memory, not intelligence. An agent does all its thinking in a context window that empties the moment a conversation ends. Think of the model as a CPU and the context window as its RAM, fast but volatile; with no disk underneath, everything you teach it is quietly thrown away. This project adds that disk, with a layered wiki as the bridge. You drop raw sources into your Obsidian vault, the agent compiles them into linked notes it looks after entirely on its own, and whenever a conversation needs something, the right notes flow back up into working memory. Everything stays plain Markdown, yours to open, read and correct. Feed it for a month and the assistant stops being a stranger; a year in, nothing else will know your work the way it does.
 
+A second brain stores what you know. A second self knows it with you and acts on it. Second Yourself is the whole machine. The operating system is this repository, the rules, skills and helper agents that schedule work, move memory into context, enforce permissions and keep the log. The disk is the wiki it compiles for you. The processor is whichever frontier model you plug in. Processors are replaced every year and get better each time. The operating system and the disk are yours, and they compound.
+
 What you build on that memory is up to you:
 
-* **A true personal assistant**, the goal this project is built towards: an agent that knows your work, your habits and your people because it remembers them (one day, even an elderly parent's medication and appointments).
+* **A second you**, the goal this project is built towards: an agent that knows your work, your habits and your people because it remembers them, and can act for you rather than only answer, from a brief in your voice to an elderly parent's medication and appointments.
 * **A research assistant**, what ships today: drop in papers and articles, ask questions, and get answers cited from your own library.
-* **A shared brain for many agents**, the direction of travel: plain files under a written contract, so a main agent holding the wiki can brief specialist agents in co-work settings.
+* **A shared brain for many agents**, which already runs: a head agent holding the wiki briefs specialist helper agents under a written contract, with independent critic and verifier agents and unattended multi-hour runs.
 
 ## What it does today
 
@@ -23,6 +25,8 @@ Once populated, the wiki can:
 * **Smart referencing:** It acts as a living, cited knowledge base that any agent can draw from. Every note carries a confidence level, so answers are grounded in your own sources and weighted by how trustworthy each one is, all while maintaining highly efficient token usage.
 * **Persistent insight:** It proactively synthesises across your sources and offers to save valuable answers as permanent, linked notes, so a brilliant idea from a conversation can be preserved instead of lost when the chat ends.
 * **Self-maintenance and growth:** The system actively cross-links files, merges duplicates, and flags conflicting information or knowledge gaps. It automatically maintains your catalogue and graph as your information compounds.
+
+Reliability is built in rather than hoped for. Every answer cites the pages it drew on. Every page carries a graded trust level. Every check runs against a planted control, so a silent failure cannot pass as a clean result. Every change to the framework itself is reviewed by an independent critic agent before it lands.
 
 We purposely designed the architecture to be universal and highly adaptable. Although it is pre-tuned for AI and machine learning research (treating models and benchmarks as primary note types), you can easily customise the repository to perfectly fit your own field or workflow. You can also personalise the agent itself in `CUSTOMISATION.md`, created on first setup: its name, tone, output styles and task roles come as starter examples, and the file is open-ended, so add whatever standing preferences you want every session to follow.
 
@@ -49,8 +53,8 @@ This is a framework rather than a plugin: it runs on an AI coding agent that rea
 5. **Clone and initialise.**
 
    ```bash
-   git clone https://github.com/HurricaHjz/obsidian-llm-wiki-assistant.git
-   cd obsidian-llm-wiki-assistant
+   git clone https://github.com/HurricaHjz/second-yourself.git
+   cd second-yourself
    bash setup.sh
    ```
 
@@ -85,6 +89,7 @@ Sources live in `raw/`; compiled notes live in `wiki/`, organised by type, with 
 | `lint` | Check the wiki for broken links, orphans, and gaps (cheap, frequent). |
 | `deep-lint` | Heavier ~monthly pass, token-bounded: audit confidence levels, flag stale claims, and re-check a capped set of sources against their live online versions. |
 | `attic` | Retire notes into cold storage, or restore them — only ever on your explicit instruction. |
+| `project` | Manage your own working repositories (Overleaf LaTeX, code) from the vault on your instruction: clones live outside the vault, the wiki keeps one registry row per repository, and content enters only as commit-pinned snapshots through `raw/` when you ask. |
 | `reflect` | Capture what a working session taught — insight, method lessons, defects — and file what you approve. Only on your explicit instruction. |
 | `adopt` | Bring a third-party skill or tool into the vault: fingerprint it, recommend a use level, report, then install and record it on your yes; `--retire` reverses. |
 | `delegate` | The agent's own runbook for handing work to subagents: which lane, what it may write, how its findings get checked. You never call it; it shapes how larger jobs are run. |

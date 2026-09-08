@@ -1,105 +1,449 @@
 {
   "schema": 2,
   "order": {
-    "model": ["haiku", "sonnet", "opus", "fable"],
-    "effort": ["low", "medium", "high", "xhigh", "max"]
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus",
+      "fable"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
   },
   "classes": {
     "verifier": {
-      "model":  {"options": ["sonnet", "opus", "fable"], "default": "sonnet"},
-      "effort": {"options": ["high", "xhigh", "max"], "default": "high"},
-      "grants": {"default": ["<claim files>"], "extras": ["wiki", "raw"]},
+      "model": {
+        "options": [
+          "sonnet",
+          "opus",
+          "fable"
+        ],
+        "default": "opus"
+      },
+      "effort": {
+        "options": [
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": "xhigh"
+      },
+      "grants": {
+        "default": [
+          "<claim files>"
+        ],
+        "extras": [
+          "wiki",
+          "raw"
+        ]
+      },
       "writes": [],
-      "tools":  ["Read", "Grep", "Glob", "Bash"],
-      "skills": {"default": ["lane-core"], "extras": ["markitdown"]},
-      "mcp":    {"default": [], "grantable": []},
-      "cache":  "1h",
-      "gate":   "G6a passed at sonnet·max; re-gate at high on a snapshot fixture with a fresh head-arm ground truth (≈$9; A12)",
-      "dated":  "model default 2026-08-27 (delegate §2 routing table, G6a); effort default 2026-09-04 (thin-lanes class table, ungated until the A12 re-gate); effort default moved to high on G6a-thin PASS (2026-09-04): target high reached"
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash",
+        "Write",
+        "Edit"
+      ],
+      "skills": {
+        "default": [
+          "lane-core"
+        ],
+        "extras": [
+          "markitdown"
+        ]
+      },
+      "mcp": {
+        "default": [],
+        "grantable": []
+      },
+      "cache": "1h",
+      "gate": "G6a-thin re-run at opus·max PASSED 2026-09-06 (fresh head arm; 9 matches, 3 defensible, 0 misses; g6a-regate-20260906.json); 2026-09-08: effort anchor xhigh under the per-call rule of 2026-09-07 17:0x; the gate result above holds; the anchor is a reference, never a pin",
+      "dated": "model default 2026-08-27 (delegate §2 routing table, G6a); effort default 2026-09-04 (thin-lanes class table, ungated until the A12 re-gate); effort default moved to high on G6a-thin PASS (2026-09-04): target high reached; model default moved to opus and effort default to max on 2026-09-06 (shape B of per-call-model-selection-rule; A3 re-gate passed the same day); tools Write and Edit added 2026-09-07 (owner decision 1 of the N125 gate: the output clause — writes only inside the call's --write directory, findings artefacts only; the fence enforces the directory, the definition the content rule); effort default moved to xhigh on 2026-09-08 as the anchor under the per-call rule of 2026-09-07 17:0x (owner ruling: an anchor is not a pin, so no downward re-gate; run-20260908-n141)",
+      "cost": {
+        "soft_usd": 12.22,
+        "usual_usd": 0.93,
+        "n": 24,
+        "window": "2026-09-04..2026-09-08",
+        "source": "the run store's spawn records: the completed lane-closed events of this class with a numeric total_cost_usd, folded 2026-09-08 at the deep-lint of that date; usual_usd is their median, soft_usd their maximum plus 25 % headroom (token-efficiency findings 2026-09-07, proposal T3), both rounded to two decimals; a class with fewer than three completed lanes carries no block"
+      }
     },
     "memory-hunter": {
-      "model":  {"options": ["sonnet", "opus"], "default": "sonnet"},
-      "effort": {"options": ["high", "xhigh", "max"], "default": "high"},
-      "grants": {"default": ["wiki"], "extras": ["raw"]},
-      "writes": ["<memory dir>"],
-      "tools":  ["Read", "Grep", "Glob", "Write", "Edit"],
-      "skills": {"default": ["lane-core"], "extras": []},
-      "mcp":    {"default": [], "grantable": []},
-      "cache":  "1h",
-      "gate":   "G6b passed at opus; gate sonnet·high on a snapshot fixture with a fresh head-arm ground truth (≈$13; A12)",
-      "dated":  "model default 2026-08-27 (delegate §2 routing table, G6b at opus); effort default 2026-09-04 (thin-lanes class table, ungated until the A12 gate); effort default moved to high on G6b-thin PASS (2026-09-04): target high reached"
+      "model": {
+        "options": [
+          "sonnet",
+          "opus"
+        ],
+        "default": "sonnet"
+      },
+      "effort": {
+        "options": [
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": "xhigh"
+      },
+      "grants": {
+        "default": [
+          "wiki"
+        ],
+        "extras": [
+          "raw"
+        ]
+      },
+      "writes": [
+        "<memory dir>"
+      ],
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Write",
+        "Edit"
+      ],
+      "skills": {
+        "default": [
+          "lane-core"
+        ],
+        "extras": []
+      },
+      "mcp": {
+        "default": [],
+        "grantable": []
+      },
+      "cache": "1h",
+      "gate": "G6b-thin re-run at opus·max FAILED 2026-09-06 (12 of 16 against the 13 bar). Re-run on a fair footing the same night (TODO 130, run-20260906-n130, g6b-fair-verdict.json): one frozen coverage-first brief, byte-identical across four arms, two per tier, all 16 items reachable; coverage sonnet·high 15 and 15, opus·max 14 and 14, so opus fails the pre-registered min-and-mean rule and the model default STAYS sonnet. Both opus arms dropped the same two plain items and over-ran the word cap by half; their usable-evidence mark is level or better at 3–4× the cost per item; 2026-09-08: effort anchor xhigh under the per-call rule of 2026-09-07 17:0x; the gate result above holds; the anchor is a reference, never a pin",
+      "dated": "model default 2026-08-27 (delegate §2 routing table, G6b at opus); effort default 2026-09-04 (thin-lanes class table, ungated until the A12 gate); effort default moved to high on G6b-thin PASS (2026-09-04): target high reached; effort default moved to max on 2026-09-06 (upward, gate-free); the opus model default proposed by shape B was not admitted, its re-gate having failed (fail branch of per-call-model-selection-rule); the fair-footing retry of 2026-09-06 confirmed the sonnet default rather than moving it, and added the class's roll-call duty (definition + brief-hunter slot), which changes the report shape and no tier; effort default moved to xhigh on 2026-09-08 as the anchor under the per-call rule of 2026-09-07 17:0x (owner ruling: an anchor is not a pin, so no downward re-gate; run-20260908-n141)",
+      "cost": {
+        "soft_usd": 2.56,
+        "usual_usd": 0.57,
+        "n": 11,
+        "window": "2026-09-04..2026-09-08",
+        "source": "the run store's spawn records: the completed lane-closed events of this class with a numeric total_cost_usd, folded 2026-09-08 at the deep-lint of that date; usual_usd is their median, soft_usd their maximum plus 25 % headroom (token-efficiency findings 2026-09-07, proposal T3), both rounded to two decimals; a class with fewer than three completed lanes carries no block"
+      }
     },
     "wiki-compile": {
-      "model":  {"options": ["sonnet", "opus", "fable"], "default": "opus"},
-      "effort": {"options": ["medium", "high", "xhigh", "max"], "default": "xhigh"},
-      "grants": {"default": ["wiki", "<assigned raw files>"], "extras": ["<sibling raw files>", "assets"]},
-      "writes": ["wiki"],
-      "tools":  ["Read", "Grep", "Glob", "Bash", "Write", "Edit"],
-      "skills": {"default": ["lane-core", "compile-core"], "extras": ["markitdown"]},
-      "mcp":    {"default": [], "grantable": []},
-      "cache":  "1h",
-      "gate":   "G3/G4 passed at opus·max with the full contract; re-gate thin at opus·xhigh (≈$40)",
-      "dated":  "model default 2026-09-02 (fable-minimising-routing, G3/G4); effort default 2026-09-04 (thin-lanes class table, ungated until the thin re-gate); effort default moved to xhigh on G3-thin PASS, attempt 2 (2026-09-04): target xhigh reached"
+      "model": {
+        "options": [
+          "sonnet",
+          "opus",
+          "fable"
+        ],
+        "default": "opus"
+      },
+      "effort": {
+        "options": [
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": "xhigh"
+      },
+      "grants": {
+        "default": [
+          "wiki",
+          "<assigned raw files>"
+        ],
+        "extras": [
+          "<sibling raw files>",
+          "assets"
+        ]
+      },
+      "writes": [
+        "wiki"
+      ],
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash",
+        "Write",
+        "Edit"
+      ],
+      "skills": {
+        "default": [
+          "lane-core",
+          "compile-core"
+        ],
+        "extras": [
+          "markitdown"
+        ]
+      },
+      "mcp": {
+        "default": [],
+        "grantable": []
+      },
+      "cache": "1h",
+      "gate": "G3/G4 passed at opus·max with the full contract; re-gate thin at opus·xhigh (≈$40); 2026-09-08: effort anchor xhigh under the per-call rule of 2026-09-07 17:0x; the gate result above holds; the anchor is a reference, never a pin",
+      "dated": "model default 2026-09-02 (fable-minimising-routing, G3/G4); effort default 2026-09-04 (thin-lanes class table, ungated until the thin re-gate); effort default moved to xhigh on G3-thin PASS, attempt 2 (2026-09-04): target xhigh reached",
+      "cost": {
+        "soft_usd": 4.66,
+        "usual_usd": 3.25,
+        "n": 5,
+        "window": "2026-09-04..2026-09-04",
+        "source": "the run store's spawn records: the completed lane-closed events of this class with a numeric total_cost_usd, folded 2026-09-08 at the deep-lint of that date; usual_usd is their median, soft_usd their maximum plus 25 % headroom (token-efficiency findings 2026-09-07, proposal T3), both rounded to two decimals; a class with fewer than three completed lanes carries no block"
+      }
     },
     "builder": {
-      "model":  {"options": ["sonnet", "opus", "fable"], "default": "opus"},
-      "effort": {"options": ["high", "xhigh", "max"], "default": "max"},
-      "grants": {"default": ["<target dirs>"], "extras": ["wiki"]},
-      "writes": ["<target dirs>"],
-      "tools":  ["Read", "Grep", "Glob", "Bash", "Write", "Edit"],
-      "skills": {"default": ["lane-core"], "extras": []},
-      "mcp":    {"default": [], "grantable": []},
-      "cache":  "1h",
-      "gate":   "gate on first thin use, in the form of a build the head reproduces (suite green, real-data run re-run by the head)",
-      "dated":  "model default 2026-09-02 (owner routing mandate, definition admitted the same day); effort default 2026-09-04 (thin-lanes class table, ungated until the first thin use); effort default carried as today's value (max): the builder's gate is its first thin use (a build the head reproduces), which has not yet occurred; target high per the thin-lanes class table (2026-09-04)"
+      "model": {
+        "options": [
+          "sonnet",
+          "opus",
+          "fable"
+        ],
+        "default": "opus"
+      },
+      "effort": {
+        "options": [
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": "xhigh"
+      },
+      "grants": {
+        "default": [
+          "<target dirs>"
+        ],
+        "extras": [
+          "wiki"
+        ]
+      },
+      "writes": [
+        "<target dirs>"
+      ],
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash",
+        "Write",
+        "Edit"
+      ],
+      "skills": {
+        "default": [
+          "lane-core"
+        ],
+        "extras": []
+      },
+      "mcp": {
+        "default": [],
+        "grantable": []
+      },
+      "cache": "1h",
+      "gate": "met at opus·max by the eighteen lane.py builds of 2026-09-04 to 2026-09-06 (head re-ran every suite); no lower target; 2026-09-08: effort anchor xhigh under the per-call rule of 2026-09-07 17:0x; the gate result above holds; the anchor is a reference, never a pin",
+      "dated": "model default 2026-09-02 (owner routing mandate, definition admitted the same day); effort default max: the builder's gate (a build the head reproduces, suite green, real-data run re-run) was met by the lane.py builds of 2026-09-04 (S-builder) and 2026-09-05/06 (eighteen at opus·max), and the thin-lanes target of `high` is withdrawn on 2026-09-06 (per-call-model-selection-rule: a build's hard part is design judgement); effort default moved to xhigh on 2026-09-08 as the anchor under the per-call rule of 2026-09-07 17:0x (owner ruling: an anchor is not a pin, so no downward re-gate; run-20260908-n141)",
+      "cost": {
+        "soft_usd": 27.83,
+        "usual_usd": 7.14,
+        "n": 45,
+        "window": "2026-09-04..2026-09-08",
+        "source": "the run store's spawn records: the completed lane-closed events of this class with a numeric total_cost_usd, folded 2026-09-08 at the deep-lint of that date; usual_usd is their median, soft_usd their maximum plus 25 % headroom (token-efficiency findings 2026-09-07, proposal T3), both rounded to two decimals; a class with fewer than three completed lanes carries no block"
+      }
     },
     "critic": {
-      "model":  {"options": ["opus", "fable"], "default": "opus"},
-      "effort": {"options": ["xhigh", "max"], "default": "max"},
-      "grants": {"default": ["<artefact files>", "<contract files>"], "extras": ["wiki", "raw"]},
+      "model": {
+        "options": [
+          "opus",
+          "fable"
+        ],
+        "default": "opus"
+      },
+      "effort": {
+        "options": [
+          "xhigh",
+          "max"
+        ],
+        "default": "max"
+      },
+      "grants": {
+        "default": [
+          "<artefact files>",
+          "<contract files>"
+        ],
+        "extras": [
+          "wiki",
+          "raw"
+        ]
+      },
       "writes": [],
-      "tools":  ["Read", "Grep", "Glob", "Bash"],
-      "skills": {"default": ["lane-core"], "extras": []},
-      "mcp":    {"default": [], "grantable": []},
-      "cache":  "1h",
-      "gate":   "no parity form exists for a review lane: the thin shape keeps today's model and effort, its first thin uses metered against the fat-shape record (A21)",
-      "dated":  "model and effort defaults 2026-08-27 (delegate §2 routing table), unchanged by the thin-lanes table (A21)"
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ],
+      "skills": {
+        "default": [
+          "lane-core"
+        ],
+        "extras": []
+      },
+      "mcp": {
+        "default": [],
+        "grantable": []
+      },
+      "cache": "1h",
+      "gate": "no parity form exists for a review lane: the thin shape keeps today's model and effort, its first thin uses metered against the fat-shape record (A21); 2026-09-08: effort anchor max under the per-call rule of 2026-09-07 17:0x; the gate result above holds; the anchor is a reference, never a pin",
+      "dated": "model and effort defaults 2026-08-27 (delegate §2 routing table), unchanged by the thin-lanes table (A21)",
+      "cost": {
+        "soft_usd": 9.67,
+        "usual_usd": 3.67,
+        "n": 41,
+        "window": "2026-09-04..2026-09-08",
+        "source": "the run store's spawn records: the completed lane-closed events of this class with a numeric total_cost_usd, folded 2026-09-08 at the deep-lint of that date; usual_usd is their median, soft_usd their maximum plus 25 % headroom (token-efficiency findings 2026-09-07, proposal T3), both rounded to two decimals; a class with fewer than three completed lanes carries no block"
+      }
     },
     "planner": {
-      "model":  {"options": ["opus", "fable"], "default": "opus"},
-      "effort": {"options": ["high", "xhigh", "max"], "default": "max"},
-      "grants": {"default": ["<batch listing>", "wiki", "<assigned raw files>"], "extras": []},
+      "model": {
+        "options": [
+          "opus",
+          "fable"
+        ],
+        "default": "opus"
+      },
+      "effort": {
+        "options": [
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": "xhigh"
+      },
+      "grants": {
+        "default": [
+          "<batch listing>",
+          "wiki",
+          "<assigned raw files>"
+        ],
+        "extras": []
+      },
       "writes": [],
-      "tools":  ["Read", "Grep", "Glob"],
-      "skills": {"default": ["lane-core"], "extras": []},
-      "mcp":    {"default": [], "grantable": []},
-      "cache":  "1h",
-      "gate":   "as the critic row (A21)",
-      "dated":  "model and effort defaults 2026-08-27 (delegate §2 routing table), unchanged by the thin-lanes table (A21); raw grant added 2026-09-04 (A23)"
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ],
+      "skills": {
+        "default": [
+          "lane-core"
+        ],
+        "extras": []
+      },
+      "mcp": {
+        "default": [],
+        "grantable": []
+      },
+      "cache": "1h",
+      "gate": "as the critic row (A21); 2026-09-08: effort anchor xhigh under the per-call rule of 2026-09-07 17:0x; the gate result above holds; the anchor is a reference, never a pin",
+      "dated": "model and effort defaults 2026-08-27 (delegate §2 routing table), unchanged by the thin-lanes table (A21); raw grant added 2026-09-04 (A23); effort default moved to xhigh on 2026-09-08 as the anchor under the per-call rule of 2026-09-07 17:0x (owner ruling: an anchor is not a pin, so no downward re-gate; run-20260908-n141)"
     },
     "reflector": {
-      "model":  {"options": ["opus", "fable"], "default": "opus"},
-      "effort": {"options": ["high", "xhigh", "max"], "default": "max"},
-      "grants": {"default": ["<transcript>"], "extras": ["wiki"]},
+      "model": {
+        "options": [
+          "opus",
+          "fable"
+        ],
+        "default": "opus"
+      },
+      "effort": {
+        "options": [
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": "max"
+      },
+      "grants": {
+        "default": [
+          "<transcript>"
+        ],
+        "extras": [
+          "wiki"
+        ]
+      },
       "writes": [],
-      "tools":  ["Read", "Grep", "Glob", "Bash"],
-      "skills": {"default": ["lane-core", "reflect-slice"], "extras": []},
-      "mcp":    {"default": [], "grantable": []},
-      "cache":  "1h",
-      "gate":   "as the critic row (A21)",
-      "dated":  "model and effort defaults 2026-08-28 (delegate §2 routing table), unchanged by the thin-lanes table (A21); Bash added 2026-09-05 (hands-off design D38: the template's /tmp extraction and runtime nonce need it)"
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ],
+      "skills": {
+        "default": [
+          "lane-core",
+          "reflect-slice"
+        ],
+        "extras": []
+      },
+      "mcp": {
+        "default": [],
+        "grantable": []
+      },
+      "cache": "1h",
+      "gate": "as the critic row (A21); 2026-09-08: effort anchor max under the per-call rule of 2026-09-07 17:0x; the gate result above holds; the anchor is a reference, never a pin",
+      "dated": "model and effort defaults 2026-08-28 (delegate §2 routing table), unchanged by the thin-lanes table (A21); Bash added 2026-09-05 (hands-off design D38: the template's /tmp extraction and runtime nonce need it)",
+      "cost": {
+        "soft_usd": 18.64,
+        "usual_usd": 4.9,
+        "n": 18,
+        "window": "2026-09-04..2026-09-08",
+        "source": "the run store's spawn records: the completed lane-closed events of this class with a numeric total_cost_usd, folded 2026-09-08 at the deep-lint of that date; usual_usd is their median, soft_usd their maximum plus 25 % headroom (token-efficiency findings 2026-09-07, proposal T3), both rounded to two decimals; a class with fewer than three completed lanes carries no block"
+      }
     },
     "gate-judge": {
-      "model":  {"options": ["opus"], "default": "opus"},
-      "effort": {"options": ["max"], "default": "max"},
-      "grants": {"default": ["<fixture>"], "extras": []},
+      "model": {
+        "options": [
+          "opus"
+        ],
+        "default": "opus"
+      },
+      "effort": {
+        "options": [
+          "max"
+        ],
+        "default": "max"
+      },
+      "grants": {
+        "default": [
+          "<fixture>"
+        ],
+        "extras": []
+      },
       "writes": [],
-      "tools":  ["Read", "Grep", "Glob"],
-      "skills": {"default": ["lane-core"], "extras": []},
-      "mcp":    {"default": [], "grantable": []},
-      "cache":  "1h",
-      "gate":   "it is the gate",
-      "dated":  "model and effort fixed 2026-09-02 (a parity gate measures the routed step's executor at its default tier)"
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ],
+      "skills": {
+        "default": [
+          "lane-core"
+        ],
+        "extras": []
+      },
+      "mcp": {
+        "default": [],
+        "grantable": []
+      },
+      "cache": "1h",
+      "gate": "it is the gate; 2026-09-08: effort fixed at max (it is the gate); the per-call rule of 2026-09-07 17:0x does not move it",
+      "dated": "model and effort fixed 2026-09-02 (a parity gate measures the routed step's executor at its default tier)",
+      "cost": {
+        "soft_usd": 4.63,
+        "usual_usd": 1.16,
+        "n": 8,
+        "window": "2026-09-04..2026-09-08",
+        "source": "the run store's spawn records: the completed lane-closed events of this class with a numeric total_cost_usd, folded 2026-09-08 at the deep-lint of that date; usual_usd is their median, soft_usd their maximum plus 25 % headroom (token-efficiency findings 2026-09-07, proposal T3), both rounded to two decimals; a class with fewer than three completed lanes carries no block"
+      }
     }
   }
 }

@@ -1355,6 +1355,81 @@ for src in "$AUDIT" "$SWEEPS" "$PREFIX"; do
 done
 leg "47 stdout-only: no write pattern in any source (grep control-verified)" "$r"
 
+# ---------------------------------------------------------------- spawn-record review (2026-09-06)
+SRR="$HERE/spawn-record-review.py"
+RD="$TMP/records"; RJ="$TMP/routing.json"; RL="$TMP/log.md"; mkdir -p "$RD"
+cat > "$RJ" <<'RJEOF'
+{"schema": 2, "order": {"model": ["haiku","sonnet","opus","fable"], "effort": ["low","medium","high","xhigh","max"]},
+ "classes": {"verifier": {"model": {"options": ["sonnet","opus","fable"], "default": "opus"}, "effort": {"options": ["high","xhigh","max"], "default": "max"}},
+             "memory-hunter": {"model": {"options": ["sonnet","opus"], "default": "sonnet"}, "effort": {"options": ["high","xhigh","max"], "default": "max"}}}}
+RJEOF
+printf '%s\n' '## [2026-09-01] deep-lint | fixture' > "$RL"
+RF="2026-09-06T12:00+0100"
+mk() { # mk <file> <lane> <ts> <model> <effort> <throttle> <reason> [row_default-json|-] [extra-json]
+  f="$RD/$1.jsonl"; [ -f "$f" ] || printf '{"ts":"2026-09-06T13:00+0100","run":"%s","event":"run-open","session":"fx"}\n' "$1" > "$f"
+  rd=""; [ "${8:-}" != "-" ] && [ -n "${8:-}" ] && rd=",\"row_default\":$8"
+  printf '{"ts":"%s","run":"%s","event":"lane-open","lane":"%s","class":"verifier","model":"%s","effort":"%s","throttle":"%s","reason":"%s"%s%s}\n' "$3" "$1" "$2" "$4" "$5" "$6" "$7" "$rd" "${9:-}" >> "$f"; }
+RDJ='{"model":"opus","effort":"max"}'
+mk r-default  D1 2026-09-06T13:00+0100 sonnet high default "(a) verify leg" "$RDJ"
+mk r-phrase   P1 2026-09-06T13:00+0100 sonnet high default "(a) sonnet because closed list; effort high because mechanical" "$RDJ"
+mk r-cheap    C1 2026-09-06T13:00+0100 sonnet high cheap "(a) x" '{"model":"sonnet","effort":"high"}'
+mk r-cheap    C2 2026-09-06T13:00+0100 opus max cheap "(a) x" '{"model":"sonnet","effort":"high"}'
+mk r-fast     F1 2026-09-06T13:00+0100 opus max fast "(a) x" '{"model":"opus","effort":"high"}'
+mk r-fast     F2 2026-09-06T13:00+0100 opus high fast "(a) x" '{"model":"opus","effort":"high"}'
+mk r-cheapfast CF1 2026-09-06T13:00+0100 sonnet high cheap-fast "(a) x" '{"model":"sonnet","effort":"high"}'
+mk r-cheapfast CF2 2026-09-06T13:00+0100 opus xhigh cheap-fast "(a) x" '{"model":"sonnet","effort":"high"}'
+mk r-top      T1 2026-09-06T13:00+0100 opus xhigh top "(a) x" '{"model":"fable","effort":"max"}'
+mk r-rereso   R1 2026-09-06T13:00+0100 opus max default "(a) x" -
+mk r-cut      B1 2026-09-06T11:59+0100 sonnet high default "(a) x" "$RDJ"
+mk r-cut      A1 2026-09-06T12:01+0100 sonnet high default "(a) x" "$RDJ"
+mk r-letter   L0 2026-09-03T23:00+0100 opus max default "no letter here" "$RDJ"
+mk r-letter   L1 2026-09-04T01:00+0100 opus max default "no letter here" "$RDJ"
+mk r-ts       Z1 garbage opus max default "(a) x" "$RDJ"
+mk r-close    U1 2026-09-06T13:00+0100 opus max default "(a) x" "$RDJ"
+mk r-close    N1 2026-09-06T13:00+0100 opus max default "(a) x" "$RDJ"
+printf '{"ts":"2026-09-06T13:10+0100","run":"r-close","event":"lane-closed","lane":"N1","effort_applied":null}\n' >> "$RD/r-close.jsonl"
+mk r-close    M1 2026-09-06T13:00+0100 opus max default "(a) x" "$RDJ"
+printf '{"ts":"2026-09-06T13:10+0100","run":"r-close","event":"lane-closed","lane":"M1","effort_applied":["high"]}\n' >> "$RD/r-close.jsonl"
+# The `auto` pick guard (2026-09-08; owner ruling 2026-09-07 17:0x): the anchor opus·xhigh, and a
+# departure either way carries its reason in <axis>_src (`auto: …`) or choice_reason.
+RDA='{"model":"opus","effort":"xhigh"}'
+mk r-auto AR1 2026-09-06T13:00+0100 opus max auto "(a) x" "$RDA" ',"model_src":"anchor","effort_src":"auto: design-heavy","choice_reason":"design-heavy"'
+mk r-auto AU1 2026-09-06T13:00+0100 opus max auto "(a) x" "$RDA" ',"model_src":"anchor","effort_src":"anchor","choice_reason":null'
+mk r-auto AA1 2026-09-06T13:00+0100 opus xhigh auto "(a) x" "$RDA" ',"model_src":"anchor","effort_src":"anchor","choice_reason":null'
+mk r-auto AD1 2026-09-06T13:00+0100 sonnet high auto "(a) x" "$RDA" ',"model_src":"auto: closed one-leg task","effort_src":"auto: closed one-leg task","choice_reason":"closed one-leg task"'
+mk r-auto AB1 2026-09-06T13:00+0100 fable max auto "(a) x" "$RDA" ',"model_src":"anchor","effort_src":"anchor","choice_reason":null'
+mk r-auto AP1 2026-09-06T13:00+0100 sonnet high auto "(a) x" "$RDA"
+printf '%s\n' '{"ts":"2026-09-06T13:00+0100","event":"spawn","lane":"old"}' 'not json' > "$RD/r-norunopen.jsonl"
+srr() { $PY "$SRR" --records "$RD" --routing "$RJ" --log "$RL" --rule-from "$RF" "$@" > "$TMP/srr.out" 2>&1; echo $? > "$TMP/srr.rc"; }
+srr
+leg "srr: default below-default sonnet·high without phrases is caught twice" "$(want "$TMP/srr.out" 'D1: model sonnet below the row default opus')$(want "$TMP/srr.out" 'D1: effort high below the row default max')"
+leg "srr: the phrase-present lane passes (the phrase check discriminates)" "$(notwant "$TMP/srr.out" 'FINDING P1')"
+leg "srr: cheap at the floor is skipped; above the floor is caught" "$(notwant "$TMP/srr.out" 'FINDING C1')$(want "$TMP/srr.out" "C2: pick above the owner's floor")"
+leg "srr: fast above the effort floor is caught; at the floor skipped" "$(want "$TMP/srr.out" "F1: effort above the owner's floor")$(notwant "$TMP/srr.out" 'FINDING F2')"
+leg "srr: cheap-fast skips both axes at the floors, catches both above" "$(notwant "$TMP/srr.out" 'FINDING CF1')$(want "$TMP/srr.out" "CF2: pick above the owner's floor")$(want "$TMP/srr.out" "CF2: effort above the owner's floor")"
+leg "srr: top flags a pick below the ceiling" "$(want "$TMP/srr.out" 'T1: model opus below the ceiling under top')$(want "$TMP/srr.out" 'T1: effort xhigh below the ceiling under top')"
+leg "srr: a line without row_default is re-resolved and labelled" "$(want "$TMP/srr.out" 'R1: re-resolved (no row_default)')$(notwant "$TMP/srr.out" 'FINDING R1')"
+leg "srr: the cut: a minute before RULE_FROM is baseline, a minute after is checked" "$(notwant "$TMP/srr.out" 'FINDING B1')$(want "$TMP/srr.out" 'A1: model sonnet below the row default')"
+leg "srr: the letter check starts at LETTER_FROM" "$(notwant "$TMP/srr.out" 'FINDING L0')$(want "$TMP/srr.out" 'L1: no instrument-rule letter')"
+leg "srr: an unparseable ts is listed" "$(want "$TMP/srr.out" 'Z1: unparsed ts')"
+leg "srr: unclosed, unread applied effort and a recorded/applied mismatch are told apart" "$(want "$TMP/srr.out" 'U1: unclosed')$(want "$TMP/srr.out" 'N1: applied effort unread')$(want "$TMP/srr.out" 'M1: effort max recorded, high applied')"
+leg "srr: a file without run-open is skipped and its bad lines counted" "$(want "$TMP/srr.out" 'r-norunopen.jsonl: skipped (no run-open, 1 bad lines)')"
+leg "srr: auto, a reasoned departure above the anchor (effort_src auto: …) is clean" "$(notwant "$TMP/srr.out" 'FINDING AR1')"
+leg "srr: auto, an unreasoned departure is the finding, naming the axis and the anchor" "$(want "$TMP/srr.out" 'FINDING AU1: auto pick without --choice-reason (effort max departs from the anchor xhigh)')"
+leg "srr: auto, an anchor pick is clean" "$(notwant "$TMP/srr.out" 'FINDING AA1')"
+leg "srr: auto, a reasoned pick BELOW the anchor is clean (the hand-set phrase check does not apply)" "$(notwant "$TMP/srr.out" 'FINDING AD1')"
+leg "srr: auto, both axes unreasoned are two findings" "$(want "$TMP/srr.out" 'FINDING AB1: auto pick without --choice-reason (model fable departs from the anchor opus)')$(want "$TMP/srr.out" 'FINDING AB1: auto pick without --choice-reason (effort max departs from the anchor xhigh)')"
+leg "srr: a pre-fields auto line (no model_src) keeps the phrase check" "$(want "$TMP/srr.out" 'AP1: model sonnet below the row default opus without')$(notwant "$TMP/srr.out" 'AP1: auto pick')"
+srr --since 2099-01-01T00:00+0100
+leg "srr: an empty window says so with the file count" "$(want "$TMP/srr.out" 'no lanes this window (control:')"
+$PY "$SRR" --records "$TMP/absent-zz" --routing "$RJ" --log "$RL" > "$TMP/srr.out" 2>&1; rc=$?
+leg "srr: a missing records directory is PROBE FAILED, exit 2" "$(want "$TMP/srr.out" 'PROBE FAILED')$([ "$rc" -eq 2 ] || printf 'exit %s; ' "$rc")"
+$PY "$SRR" --records "$RD" --routing "$TMP/no-routing.json" --log "$RL" > "$TMP/srr.out" 2>&1; rc=$?
+leg "srr: an unreadable routing record is PROBE FAILED, exit 2" "$(want "$TMP/srr.out" 'PROBE FAILED')$([ "$rc" -eq 2 ] || printf 'exit %s; ' "$rc")"
+RF_SCRIPT=$(grep -o 'RULE_FROM = "[^"]*"' "$SRR" | head -1 | sed 's/.*"\(.*\)"/\1/')
+RF_LOG=$(grep -o 'per-call model and effort rule shipped 2026-09-06 [0-9][0-9]:[0-9][0-9]' "$HERE/../../../wiki/log.md" | head -1 | grep -o '[0-9][0-9]:[0-9][0-9]$')
+leg "srr: RULE_FROM equals the ship entry's title time in wiki/log.md" "$([ -n "$RF_LOG" ] && [ "${RF_SCRIPT:11:5}" = "$RF_LOG" ] || printf 'script %s vs log %s; ' "$RF_SCRIPT" "$RF_LOG")"
+
 # ---------------------------------------------------------------- teardown
 chmod -R u+w "$TMP"
 rm -rf "$TMP"

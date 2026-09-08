@@ -33,9 +33,17 @@ reads pages for confidence or fetches anything.
 
 ## Pipeline (read-only until the user approves fixes)
 
-### 1 — Index consistency
-Read `wiki/index.md`; glob every `.md` under `wiki/` (exclude `index.md`, `log.md`).
-Report: pages registered in the index but **missing on disk**, and pages on disk but **not registered**.
+### 1 — Index consistency (one scripted check)
+Run `python3 .claude/skills/lint/check-index.py --vault .` (exit 0 = the probe ran, findings or none;
+2 = broken premise). It compares `wiki/index.md` with the pages on disk and prints three lists with their
+counts: **unindexed pages** (on disk, registered by no `- [[…]]` entry), **dangling index entries**
+(registered, no page on disk) and **duplicate entries** (the same target registered twice). The rules are
+deep-lint `audit-pools.py`'s, copied so a reader can check them against it: resolution on the basename with or without
+`.md`, `index.md` and `log.md` excluded as pages, and a page's frontmatter `aliases:` counting as a
+resolution on both sides (one deliberate departure from audit-pools, which aliases the dangling side only). It
+prints `SCANNED: <pages> pages · <entries> index entries` as its own positive control (§11): a root it cannot
+scan ends in `PROBE FAILED` and exit 2 before any list prints, so a clean result always carries non-zero counts.
+Copy the three figures into the report — never re-derive them by hand. Shared stems are printed as information, not a finding.
 
 ### 2 — Link health (one shared script — the single source of truth for link rules)
 Run `python3 .claude/skills/lint/check-links.py` (exit 0 = clean, 1 = findings; deep-lint's
@@ -45,9 +53,21 @@ and root-doc targets resolve; `wiki/log.md` is exempt as a source (append-only h
 embeds `![[name.png|pdf|…]]` are checked against `assets/`** — a missing target is a **dead embed**,
 reported separately (they are checked, not skipped). The script prints its scan totals as its own
 positive control (§11): zero findings with zero links scanned is a broken probe, not a clean vault.
+- The same script resolves each page's frontmatter `sources:` entries against disk and reports **dangling
+  sources** separately from dead links: one line per page · path, with `SOURCES SCANNED:` as that arm's
+  control. A URL, prose provenance (`email: …`, `session: …`) and an entry that declares its own deletion
+  (`path (deleted YYYY-MM-DD)`) are counted, never flagged — provenance written as prose is legitimate. An entry the
+  parser could not read prints as `(empty or unparsed sources)` inside the same block: read it, since it is the
+  parser's own gap detector, not a dangler.
+- Every script in this directory refuses, in vault mode, a root that is not a vault (no `raw/` + `wiki/`): one `PROBE
+  FAILED: <root> is not a vault root (no raw/ or wiki/)` line on stderr and exit 2, so a wrong root can
+  never read as a clean vault scan (the 2026-08-26 standard; the register entry of 2026-09-06 that closed it
+  here; the file-mode forms `anomaly-lister --pages` and `tier-cap-check --verdicts` keep their own checks). Every
+  Python script and `check-qmd-registry.sh` take `--vault ROOT`; an unknown flag is refused with exit 2, never
+  read as the root.
 - Orphans are scripted too: `python3 .claude/skills/lint/check-orphans.py --vault .` reports a page with **no inbound links** from any other page as an **orphan**, exempting `index`, `log`, and `maps/` pages (Maps of Content are navigational entry points, not orphans). It applies this directory's link rules, prints its own inbound-link control (zero orphans with a zero control is a broken probe, §11), and additionally lists the pages `index.md` alone reaches — information, not a finding.
 - Two further helpers in this directory serve deep-lint and the routing design's verify leg, not routine lint: `tier-cap-check.py` (§4.6 type caps and boundaries; a documented override on the `confidence:` line is reported separately, never as a violation) and `anomaly-lister.py` (page-visible anomalies: open conflict blocks, `flagged:` lines, thin-page notes, `unverified` markers). Suite for all three: `bash .claude/skills/lint/test_lint_phase2.sh`.
-- **Routing (M0, 2026-09-02):** every lint check except Step 1's index-consistency comparison is a script; the agent reads reports and never re-derives a scripted count (orphans became `check-orphans.py`, Phase 2 of the routing design). Step 1 remains an agent comparison until it is scripted (recorded residue).
+- **Routing (M0, 2026-09-02; residue closed 2026-09-07):** every lint check is a script; the agent reads reports and never re-derives a scripted count (orphans became `check-orphans.py`, Phase 2 of the routing design; Step 1's index-consistency comparison became `check-index.py`, the last hand comparison in this pipeline).
 
 ### 2b — Pending freshness flags (count only — reconciling them is deep-lint's job)
 `grep -rl "^flagged:" wiki --include='*.md' | wc -l` — with the engine control

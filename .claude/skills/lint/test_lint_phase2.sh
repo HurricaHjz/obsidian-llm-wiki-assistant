@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# test_lint_phase2.sh — regression fixtures for the three stdout-only lint scripts:
-# check-orphans.py, tier-cap-check.py and anomaly-lister.py. Every fixture is built under
+# test_lint_phase2.sh — regression fixtures for the stdout-only lint scripts: check-orphans.py,
+# tier-cap-check.py, anomaly-lister.py, check-links.py's sources arm and check-index.py, plus
+# the root guard every script in this directory carries. Every fixture is built under
 # a fresh mktemp -d and removed at exit; the vault is never touched. The final leg is the
 # stdout-only proof: a read-only copy, checksum manifests of the fixture AND of the script
 # home before and after, plus a source grep for write patterns.
+#
+# Three register entries settled here (2026-09-07): the wrong-root guard (2026-09-06), the
+# unresolved `sources:` paths (2026-09-03) and index consistency as a script (2026-09-02).
+# Every fixture root therefore carries raw/ as well as wiki/ — a root without both is refused
+# by design, and the root-guard section below is where that refusal is asserted.
 #
 # Three fixtures. `planted` carries one page per rule the scripts enforce, `clean` the same
 # shapes with nothing wrong, and `edge` the malformed and awkward inputs a real vault throws
@@ -19,6 +25,10 @@ ORPH="$HOME_DIR/check-orphans.py"
 TIER="$HOME_DIR/tier-cap-check.py"
 ANOM="$HOME_DIR/anomaly-lister.py"
 LINKS="$HOME_DIR/check-links.py"      # the link rules check-orphans.py replicates
+INDEX="$HOME_DIR/check-index.py"      # index consistency, formerly a hand comparison
+PAL="$HOME_DIR/apply-palette.py"      # the one script here that writes, on request
+SHIP="$HOME_DIR/check-shipped-links.py"
+QMD="$HOME_DIR/check-qmd-registry.sh"
 
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '    ok   — %s\n' "$1"; }
@@ -52,8 +62,20 @@ print(sum(1 for v in d[key]
 ' "$@"; }
 
 # ---------------------------------------------------------------- fixture builders
+# rawbase <dir>  — the raw/ layer. Two jobs: a fixture root must hold raw/ AND wiki/ or every
+# script refuses it (the root guard), and every raw file a fixture page names in `sources:`
+# has to exist or the clean fixture would report dangling sources of its own.
+rawbase(){ local d="$1" f
+  mkdir -p "$d/raw/1-articles" "$d/raw/2-papers" "$d/raw/4-webinfo" "$d/raw/6-social"
+  for f in 1-articles/a 1-articles/b 2-papers/paper 2-papers/only 4-webinfo/a 4-webinfo/b \
+           6-social/a 6-social/b 6-social/c 6-social/post 6-social/mirror; do
+    printf -- '# raw capture\nfixture provenance file.\n' > "$d/raw/$f.md"
+  done
+}
+
 # base <dir>  — the registries, a map and a hub every non-planted page hangs off.
 base(){ local d="$1"
+  rawbase "$d"
   mkdir -p "$d/wiki/concepts" "$d/wiki/tools" "$d/wiki/sources" "$d/wiki/maps"
   cat > "$d/wiki/index.md" <<'MDFIX'
 ---
@@ -155,7 +177,7 @@ clean(){ local d="$W/clean"; rm -rf "$d"; base "$d"
 }
 
 # The edge fixture: malformed and awkward inputs, one page per failure mode.
-edge(){ local d="$W/edge"; rm -rf "$d"
+edge(){ local d="$W/edge"; rm -rf "$d"; rawbase "$d"
   mkdir -p "$d/wiki/concepts" "$d/wiki/tools" "$d/wiki/sources" "$d/wiki/maps" "$d/assets"
   printf 'not a real image\n' > "$d/assets/diagram.png"
   printf -- '---\ntitle: "Index"\ntype: index\nconfidence: high\n---\n\n- [[EdgeHub]]\n- [[CatalogueOnly]]\n' > "$d/wiki/index.md"
@@ -232,8 +254,12 @@ CJ="$(python3 "$ORPH" --vault "$C" --format json)"
 CO="$(printf '%s' "$CJ" | jget orphan_count)"; CC="$(printf '%s' "$CJ" | jget inbound_control)"
 if [ "$CO" = "0" ] && [ "$CC" -gt 0 ]; then ok "a clean fixture reports 0 orphans with a non-zero inbound control ($CC pages)"
 else no "a clean fixture reports 0 orphans with a non-zero inbound control  [orphans $CO, control $CC]"; fi
-out="$(python3 "$ORPH" --vault "$W" 2>"$ERR")"; rc=$?
-if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'PROBE FAILED'; then ok "no wiki directory is a broken premise, never clean"
+# The root guard now intercepts this case: a directory with neither raw/ nor wiki/ is refused
+# before the census reads anything. Same scenario as the pre-2026-09-07 leg (a root that is not
+# a vault), asserted against the guard's contract — one line on stderr, exit 2, no stdout.
+GERR="$W/guard-stderr.txt"
+out="$(python3 "$ORPH" --vault "$W" 2>"$GERR")"; rc=$?
+if [ "$rc" = 2 ] && [ -z "$out" ] && grep -q 'is not a vault root' "$GERR"; then ok "no wiki directory is a broken premise, never clean"
 else no "no wiki directory is a broken premise  [exit $rc: $out]"; fi
 
 printf '\n--- check-orphans.py · edge inputs ---\n'
@@ -266,12 +292,12 @@ else
 fi
 out="$(python3 "$ORPH" --vault "$E" --format json 2>"$ERR" | jget orphan_count)"
 eq "the edge fixture's orphan count is the four unlinked pages" "4" "$out"
-mkdir -p "$W/nolinks/wiki/concepts"
+mkdir -p "$W/nolinks/wiki/concepts" "$W/nolinks/raw"
 printf -- '---\ntitle: "Alone"\ntype: concept\nconfidence: medium\n---\n\n## Definition\nNo links anywhere.\n' > "$W/nolinks/wiki/concepts/Alone.md"
 out="$(python3 "$ORPH" --vault "$W/nolinks" 2>"$ERR")"; rc=$?
 if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'zero page links scanned'; then ok "a wiki with no links at all is a broken premise, never 'no orphans'"
 else no "a wiki with no links at all is a broken premise  [exit $rc: $out]"; fi
-mkdir -p "$W/emptywiki/wiki"
+mkdir -p "$W/emptywiki/wiki" "$W/emptywiki/raw"
 out="$(python3 "$ORPH" --vault "$W/emptywiki" 2>"$ERR")"; rc=$?
 if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'PROBE FAILED'; then ok "an empty wiki directory is a broken premise for the orphan census"
 else no "an empty wiki directory is a broken premise for the orphan census  [exit $rc: $out]"; fi
@@ -311,8 +337,8 @@ if [ "$KV" = "0" ] && [ "$KC" = "3/3" ]; then ok "a clean fixture reports 0 viol
 else no "a clean fixture reports 0 violations with cap-control 3/3  [violations $KV, control $KC]"; fi
 eq "a zero override count carries its own control on the same run" "notes 2/2 · overrides 2/2" \
    "$(printf '%s' "$KJ" | jget extra_control)"
-out="$(python3 "$TIER" --vault "$W" 2>"$ERR")"; rc=$?
-if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'PROBE FAILED'; then ok "no wiki directory is a broken premise for the tier check too"
+out="$(python3 "$TIER" --vault "$W" 2>"$GERR")"; rc=$?
+if [ "$rc" = 2 ] && [ -z "$out" ] && grep -q 'is not a vault root' "$GERR"; then ok "no wiki directory is a broken premise for the tier check too"
 else no "no wiki directory is a broken premise for the tier check  [exit $rc: $out]"; fi
 
 printf '\n--- tier-cap-check.py · edge inputs ---\n'
@@ -441,7 +467,7 @@ if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'PROBE FAILED'; then ok "an emp
 else no "an empty wiki directory is a broken premise for the anomaly census  [exit $rc: $out]"; fi
 
 printf '\n--- shared premises ---\n'
-mkdir -p "$W/broken/wiki/concepts"
+mkdir -p "$W/broken/wiki/concepts" "$W/broken/raw"
 printf -- '---\ntitle: "Live"\ntype: concept\nconfidence: medium\n---\n\n## Related\n- [[Dangling]]\n' > "$W/broken/wiki/concepts/Live.md"
 ln -s "$W/broken/wiki/concepts/no-such-target" "$W/broken/wiki/concepts/Dangling.md"
 for pair in "orphans:$ORPH" "tier:$TIER" "anomaly:$ANOM"; do
@@ -456,6 +482,164 @@ env PYTHONIOENCODING=ascii python3 "$TIER" --vault "$E" > "$W/ascii-tier.txt" 2>
 env PYTHONIOENCODING=ascii python3 "$ANOM" --vault "$E" > "$W/ascii-anom.txt" 2>"$ERR" || r3=$?
 if [ "$r1$r2$r3" = "000" ] && grep -q 'Ada' "$W/ascii-orph.txt"; then ok "an ascii stdout does not turn a unicode page name into a traceback"
 else no "an ascii stdout does not turn a unicode page name into a traceback  [exits $r1 $r2 $r3]"; fi
+
+printf '\n--- root guard: a root that is not a vault (register entry 2026-09-06) ---\n'
+# The entry: check-links.py printed "SCANNED: 0 pages … DEAD LINKS: 0" and exited 0 on a root
+# holding no vault, so a caller reading the exit code got a clean bill of health from a probe
+# that opened no file. Every script here now applies the 2026-08-26 standard (raw/ + wiki/ or
+# refuse). Each leg asserts all three parts: exit 2, the message on stderr, nothing on stdout.
+NOVAULT="$W/notavault"; rm -rf "$NOVAULT"; mkdir -p "$NOVAULT/docs"
+printf 'a directory that is not a vault\n' > "$NOVAULT/docs/readme.md"
+guard(){ local nm="$1"; shift; local gout grc
+  gout="$("$@" 2>"$GERR")"; grc=$?
+  if [ "$grc" = 2 ] && [ -z "$gout" ] && grep -q 'is not a vault root (no raw/ or wiki/)' "$GERR"
+  then ok "$nm refuses a root that is not a vault (exit 2, one line on stderr, no stdout)"
+  else no "$nm refuses a root that is not a vault  [exit $grc, stdout '$gout', stderr '$(head -1 "$GERR")']"; fi; }
+guard "check-links.py"         python3 "$LINKS" --vault "$NOVAULT"
+guard "check-orphans.py"       python3 "$ORPH"  --vault "$NOVAULT"
+guard "tier-cap-check.py"      python3 "$TIER"  --vault "$NOVAULT"
+guard "anomaly-lister.py"      python3 "$ANOM"  --vault "$NOVAULT"
+guard "check-index.py"         python3 "$INDEX" --vault "$NOVAULT"
+guard "check-shipped-links.py" python3 "$SHIP"  "$NOVAULT"
+guard "apply-palette.py"       python3 "$PAL"   --apply --vault "$NOVAULT"
+guard "check-qmd-registry.sh"  sh "$QMD" "$NOVAULT"
+guard "check-qmd-registry.sh (--vault form)" sh "$QMD" --vault "$NOVAULT"
+# The positive control for the eight refusals above: the same scripts, on a real fixture vault,
+# on this same run. A guard that refused everything would pass the legs above and fail here.
+scans(){ local nm="$1" want="$2"; shift 2; local sout src
+  sout="$("$@" 2>"$GERR")"; src=$?
+  if [ "$src" = "$want" ] && [ -n "$sout" ]
+  then ok "control: $nm still scans a fixture vault on the same run (exit $src)"
+  else no "control: $nm still scans a fixture vault  [exit $src, want $want; $(head -1 "$GERR")]"; fi; }
+scans "check-links.py"   0 python3 "$LINKS" --vault "$C"
+scans "check-orphans.py" 0 python3 "$ORPH"  --vault "$C"
+scans "check-index.py"   0 python3 "$INDEX" --vault "$C"
+# apply-palette.py reads its palette from the root it is given, so its control needs a fixture
+# vault carrying one: --check then reports the missing groups and exits 1, which is the script
+# running, not refusing. Built apart from the three shared fixtures, whose manifests are frozen.
+PALV="$W/palette-vault"; rm -rf "$PALV"; mkdir -p "$PALV/raw" "$PALV/wiki" "$PALV/.claude/skills/lint"
+cp "$HOME_DIR/palette.json" "$PALV/.claude/skills/lint/palette.json"
+scans "apply-palette.py" 1 python3 "$PAL"   --check --vault "$PALV"
+badflag(){ local nm="$1"; shift; local brc
+  "$@" > /dev/null 2>"$GERR"; brc=$?
+  if [ "$brc" = 2 ]; then ok "$nm refuses an unknown flag instead of reading it as a root"
+  else no "$nm refuses an unknown flag  [exit $brc]"; fi; }
+badflag "check-links.py"         python3 "$LINKS" --vault "$C" --deep
+badflag "check-orphans.py"       python3 "$ORPH"  --vault "$C" --deep
+badflag "check-index.py"         python3 "$INDEX" --vault "$C" --deep
+badflag "apply-palette.py"       python3 "$PAL"   --check --vault "$C" --deep
+badflag "check-shipped-links.py" python3 "$SHIP"  "$C" --deep
+badflag "check-qmd-registry.sh"  sh "$QMD" "$C" wiki --deep
+LV="$(python3 "$LINKS" --vault "$C" 2>"$GERR")"; rc=$?
+LP="$(python3 "$LINKS" "$C" 2>>"$GERR")"
+if [ "$rc" = 0 ] && [ -n "$LV" ] && [ "$LV" = "$LP" ]
+then ok "check-links.py reads --vault, the sibling spelling, exactly as the positional form"
+else no "check-links.py reads --vault as the positional form  [exit $rc]"; fi
+rm -rf "$W/palette-target"; mkdir -p "$W/palette-target/docs"
+out="$(python3 "$PAL" --apply "$W/palette-target" 2>"$GERR")"; rc=$?
+if [ "$rc" = 2 ] && [ ! -e "$W/palette-target/.obsidian" ]
+then ok "apply-palette.py refuses a non-vault root BEFORE it writes anything"
+else no "apply-palette.py refuses a non-vault root before writing  [exit $rc]"; fi
+
+printf '\n--- check-links.py · sources: arm (register entry 2026-09-03) ---\n'
+# The entry: 1,044 `sources:` paths across the vault and no probe resolved one of them; three
+# were dead. The arm resolves every entry classified as a vault path and leaves URLs, prose
+# provenance and entries that declare their own deletion alone — each counted, so a zero is
+# auditable rather than a silence.
+SFIX="$W/sourcefix"; rm -rf "$SFIX"; rawbase "$SFIX"; mkdir -p "$SFIX/wiki/concepts" "$SFIX/assets"
+printf -- '# Framework Doc\nA root document a page may cite as its source.\n' > "$SFIX/CLAUDE.md"
+printf -- 'a raw capture whose file name carries commas\n' > "$SFIX/raw/1-articles/one, two, three.md"
+printf -- '---\ntitle: "Index"\ntype: index\nconfidence: high\n---\n## Concepts\n- [[GoodSource]] — the clean case.\n' > "$SFIX/wiki/index.md"
+printf -- '---\ntitle: "GoodSource"\ntype: concept\nconfidence: medium\nsources: [raw/1-articles/a.md, "raw/2-papers/paper.md"]\n---\n\n## Definition\nEvery source resolves.\n' > "$SFIX/wiki/concepts/GoodSource.md"
+printf -- '---\ntitle: "MissingSource"\ntype: concept\nconfidence: medium\nsources: [raw/1-articles/gone.md]\n---\n\n## Definition\nOne source path names no file.\n' > "$SFIX/wiki/concepts/MissingSource.md"
+printf -- '---\ntitle: "UrlSource"\ntype: concept\nconfidence: medium\nsources: ["https://example.org/paper", raw/1-articles/b.md]\n---\n\n## Definition\nA URL is provenance, not a path on disk.\n' > "$SFIX/wiki/concepts/UrlSource.md"
+printf -- '---\ntitle: "ProseSource"\ntype: concept\nconfidence: medium\nsources: ["email: someone@example.org (a person, and a comma)", usage, 20 Aug 2026]\n---\n\n## Definition\nProse provenance is legitimate and must not be flagged.\n' > "$SFIX/wiki/concepts/ProseSource.md"
+printf -- '---\ntitle: "AnnotatedSource"\ntype: concept\nconfidence: medium\nsources: ["assets/gone.md (deleted 2026-01-01)"]\n---\n\n## Definition\nThe entry declares its own absence.\n' > "$SFIX/wiki/concepts/AnnotatedSource.md"
+printf -- '---\ntitle: "RootDoc"\ntype: concept\nconfidence: medium\nsources: [CLAUDE.md]\n---\n\n## Definition\nA root document, named without a folder.\n' > "$SFIX/wiki/concepts/RootDoc.md"
+printf -- '---\ntitle: "CommaPath"\ntype: concept\nconfidence: medium\nsources: ["raw/1-articles/one, two, three.md"]\n---\n\n## Definition\nOne quoted path carrying commas.\n' > "$SFIX/wiki/concepts/CommaPath.md"
+printf -- '---\ntitle: "BlockSource"\ntype: concept\nconfidence: medium\nsources:\n  - raw/4-webinfo/a.md\n  - "raw/4-webinfo/gone.md"\n---\n\n## Definition\nBlock-form list, one entry missing.\n' > "$SFIX/wiki/concepts/BlockSource.md"
+printf -- '---\ntitle: "EmptyList"\ntype: concept\nconfidence: medium\nsources: []\n---\n\n## Definition\nThe key is present and carries nothing.\n' > "$SFIX/wiki/concepts/EmptyList.md"
+SRCOUT="$(python3 "$LINKS" --vault "$SFIX" 2>"$ERR")"; rc=$?
+srcline(){ printf '%s\n' "$SRCOUT" | grep -c -- "$1"; }
+srcnum(){ printf '%s\n' "$SRCOUT" | sed -n "s/^SOURCES SCANNED: .*| \([0-9]*\) $1.*/\1/p"; }
+eq "a sources: path that names no file on disk is a dangling source" "1" \
+   "$(srcline 'DANGLING SOURCES: 2')"
+eq "the dangling entry names the page and the path" "1" \
+   "$(srcline '  wiki/concepts/MissingSource.md · raw/1-articles/gone.md')"
+eq "a block-form sources: list is read too" "1" \
+   "$(srcline '  wiki/concepts/BlockSource.md · raw/4-webinfo/gone.md')"
+eq "a URL entry is counted, never resolved against disk" "1" "$(srcnum 'URLs')"
+eq "prose provenance is skipped and counted, never flagged" "3" "$(srcnum 'prose')"
+eq "no prose entry reaches the dangling list" "0" "$(srcline 'ProseSource')"
+eq "an entry that declares its own deletion is reported apart, not as a finding" "1" \
+   "$(srcline '(annotated absence) wiki/concepts/AnnotatedSource.md')"
+eq "a root document named without a folder resolves" "0" "$(srcline 'RootDoc')"
+eq "a quoted path carrying commas is one entry, not three fragments" "0" "$(srcline 'CommaPath')"
+eq "an empty sources: list is counted as such, never as a missing path" "1" \
+   "$(srcline '(empty or unparsed sources) wiki/concepts/EmptyList.md')"
+if [ "$rc" = 1 ]; then ok "a dangling source alone sets the findings exit code (1), as a dead link does"
+else no "a dangling source sets the findings exit code  [exit $rc]"; fi
+CSRC="$(python3 "$LINKS" --vault "$C" 2>"$ERR")"; rc=$?
+CD="$(printf '%s\n' "$CSRC" | grep -c 'DANGLING SOURCES: 0')"
+CP="$(printf '%s\n' "$CSRC" | sed -n 's/^SOURCES SCANNED: .*| \([0-9]*\) vault paths resolved.*/\1/p')"
+if [ "$CD" = "1" ] && [ "$CP" -gt 0 ] && [ "$rc" = 0 ]
+then ok "a clean fixture reports 0 dangling sources with $CP paths resolved as its control"
+else no "a clean fixture reports 0 dangling sources with a non-zero path count  [$CD, paths $CP, exit $rc]"; fi
+
+printf '\n--- check-index.py (register entry 2026-09-02) ---\n'
+# The entry: every other lint check is a script and Step 1 was still a Read plus a glob plus a
+# hand comparison. The rules are deep-lint audit-pools.py's, so the two cannot drift.
+IXP="$W/index-planted"; rm -rf "$IXP"; rawbase "$IXP"; mkdir -p "$IXP/wiki/concepts"
+{ printf -- '---\ntitle: "Index"\ntype: index\nconfidence: high\n---\n\n'
+  printf -- '> Format: `- [[Page Name]] — one-line description.`\n\n## Concepts\n'
+  printf -- '- [[Registered]] — a page on disk.\n'
+  printf -- '- [[Registered]] — the same target, a second time.\n'
+  printf -- '- [[NoSuchPage]] — nothing on disk answers to this.\n'
+  printf -- '- [[AliasName]] — registered under the page own alias.\n'
+  printf -- '<!-- - [[CommentedOut]] — a commented entry is not an entry. -->\n'
+} > "$IXP/wiki/index.md"
+printf -- '---\ntitle: "Log"\ntype: log\nconfidence: high\n---\n## [2026-01-01] ingest | fixture\n- **Changed**: nothing\n' > "$IXP/wiki/log.md"
+printf -- '---\ntitle: "Registered"\ntype: concept\nconfidence: medium\n---\n\n## Definition\nRegistered once, listed twice.\n' > "$IXP/wiki/concepts/Registered.md"
+printf -- '---\ntitle: "Aliased"\ntype: concept\nconfidence: medium\naliases: [AliasName]\n---\n\n## Definition\nRegistered under an alias.\n' > "$IXP/wiki/concepts/Aliased.md"
+printf -- '---\ntitle: "Unindexed"\ntype: concept\nconfidence: medium\n---\n\n## Definition\nOn disk, in no index entry.\n' > "$IXP/wiki/concepts/Unindexed.md"
+IXOUT="$(python3 "$INDEX" --vault "$IXP" 2>"$ERR")"; rc=$?
+ixline(){ printf '%s\n' "$IXOUT" | grep -c -- "$1"; }
+eq "a page no index entry registers is reported as unindexed" "1" "$(ixline 'UNINDEXED PAGES: 1')"
+eq "the unindexed page is named by its vault path" "1" "$(ixline '  wiki/concepts/Unindexed.md')"
+eq "an index entry naming no page on disk is dangling" "1" "$(ixline 'DANGLING INDEX ENTRIES: 1')"
+eq "the dangling entry is named" "1" "$(ixline '  nosuchpage')"
+eq "the same target registered twice is a duplicate, with its count" "1" \
+   "$(ixline '  registered · 2 entries')"
+eq "a page registered under its frontmatter alias is not unindexed" "0" "$(ixline 'Aliased.md')"
+eq "an entry inside an HTML comment is not an entry" "0" "$(ixline 'commentedout')"
+eq "the format example in the index header is not read as an entry" "0" "$(ixline 'page name')"
+eq "index.md and log.md are not counted as pages against themselves" "1" \
+   "$(ixline 'SCANNED: 3 pages · 4 index entries')"
+if [ "$rc" = 0 ]; then ok "a census with findings still exits 0 (the sibling census convention)"
+else no "a census with findings exits 0  [exit $rc]"; fi
+IXC="$W/index-clean"; rm -rf "$IXC"; rawbase "$IXC"; mkdir -p "$IXC/wiki/concepts"
+{ printf -- '---\ntitle: "Index"\ntype: index\nconfidence: high\n---\n\n## Concepts\n'
+  printf -- '- [[Registered]] — a page on disk.\n- [[AliasName]] — the alias of the other page.\n'
+} > "$IXC/wiki/index.md"
+printf -- '---\ntitle: "Log"\ntype: log\nconfidence: high\n---\n## [2026-01-01] ingest | fixture\n- **Changed**: nothing\n' > "$IXC/wiki/log.md"
+printf -- '---\ntitle: "Registered"\ntype: concept\nconfidence: medium\n---\n\n## Definition\nRegistered.\n' > "$IXC/wiki/concepts/Registered.md"
+printf -- '---\ntitle: "Aliased"\ntype: concept\nconfidence: medium\naliases: [AliasName]\n---\n\n## Definition\nRegistered under an alias.\n' > "$IXC/wiki/concepts/Aliased.md"
+IXCOUT="$(python3 "$INDEX" --vault "$IXC" 2>"$ERR")"; rc=$?
+IXZ="$(printf '%s\n' "$IXCOUT" | grep -c -E '^(UNINDEXED PAGES|DANGLING INDEX ENTRIES|DUPLICATE INDEX ENTRIES): 0$')"
+IXS="$(printf '%s\n' "$IXCOUT" | sed -n 's/^SCANNED: \([0-9]*\) pages · \([0-9]*\) index entries.*/\1 \2/p')"
+if [ "$IXZ" = "3" ] && [ "$IXS" = "2 2" ] && [ "$rc" = 0 ]
+then ok "a clean index reports three zeros with SCANNED $IXS as its control"
+else no "a clean index reports three zeros with a non-zero control  [zeros $IXZ, scanned '$IXS', exit $rc]"; fi
+rm -f "$IXC/wiki/index.md"
+out="$(python3 "$INDEX" --vault "$IXC" 2>"$ERR")"; rc=$?
+if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'PROBE FAILED: no wiki/index.md'
+then ok "a missing wiki/index.md is a broken premise, never an empty comparison"
+else no "a missing wiki/index.md is a broken premise  [exit $rc: $out]"; fi
+printf -- '---\ntitle: "Index"\ntype: index\nconfidence: high\n---\n\nNo entries at all.\n' > "$IXC/wiki/index.md"
+out="$(python3 "$INDEX" --vault "$IXC" 2>"$ERR")"; rc=$?
+if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'registers no page'
+then ok "an index that registers nothing is a broken probe, not a vault of unindexed pages"
+else no "an index that registers nothing is a broken probe  [exit $rc: $out]"; fi
 
 printf '\n--- stdout-only proof (must run last) ---\n'
 RO="$W/readonly"; rm -rf "$RO"; cp -R "$P" "$RO"
@@ -479,11 +663,17 @@ python3 "$ORPH" --vault "$RE_" --format json > /dev/null; r7=$?
 python3 "$TIER" --vault "$RE_" > /dev/null; r8=$?
 python3 "$ANOM" --vault "$RE_" --unverified-form backtick > /dev/null; r9=$?
 python3 "$ANOM" --vault "$RE_" --pages "$RE_/wiki/concepts/TailConflict.md" > /dev/null; r10=$?
+python3 "$INDEX" --vault "$RO" > /dev/null; r11=$?
+python3 "$INDEX" --vault "$RE_" > /dev/null; r12=$?
+# check-links.py reports findings with exit 1, so its own leg reads "the probe ran" as 0 or 1.
+python3 "$LINKS" --vault "$RO" > /dev/null; rl1=$?
+python3 "$LINKS" --vault "$RE_" > /dev/null; rl2=$?
 chmod -R u+w "$RO" "$RE_"
 AFTER_F="$(manifest "$RO")$(manifest "$RE_")"
 END_H="$(manifest "$HOME_DIR")"; END_FIX="$(manifest "$P")$(manifest "$C")$(manifest "$E")"
-if [ "$r1$r2$r3$r4$r5$r6$r7$r8$r9$r10" = "0000000000" ]; then ok "every script and flag runs clean against a chmod -R a-w vault copy"
-else no "every script and flag runs clean against a read-only copy  [exits $r1 $r2 $r3 $r4 $r5 $r6 $r7 $r8 $r9 $r10]"; fi
+if [ "$r1$r2$r3$r4$r5$r6$r7$r8$r9$r10$r11$r12" = "000000000000" ] && [ "$rl1" -le 1 ] && [ "$rl2" -le 1 ]
+then ok "every script and flag runs clean against a chmod -R a-w vault copy"
+else no "every script and flag runs clean against a read-only copy  [exits $r1 $r2 $r3 $r4 $r5 $r6 $r7 $r8 $r9 $r10 $r11 $r12, links $rl1 $rl2]"; fi
 if [ "$(hashes "$AFTER_F")" -ge 10 ] && [ "$BEFORE_F" = "$AFTER_F" ]; then ok "the read-only fixtures' checksum manifest is unchanged after every run"
 else no "the read-only fixtures' checksum manifest is unchanged  [$(hashes "$BEFORE_F") before, $(hashes "$AFTER_F") after]"; fi
 # The whole-run comparison: these baselines predate the first invocation in this file.
@@ -507,12 +697,23 @@ for pat in 'open\([^)]*["'"'"'][wax]' 'write_text' 'write_bytes' 'os\.remove' 'o
            'os\.rename' 'os\.replace' 'os\.mkdir' 'os\.rmdir' 'makedirs' 'shutil\.' \
            'subprocess' 'tempfile' 'pathlib' 'io\.open' 'os\.open' 'os\.fdopen' \
            'os\.system' 'os\.popen' 'print\(.*file=open'; do
-  hits=$((hits + $(npat "$pat" "$ORPH" "$TIER" "$ANOM")))
+  hits=$((hits + $(npat "$pat" "$ORPH" "$TIER" "$ANOM" "$INDEX" "$LINKS")))
   if [ "$(printf '%s\n' "$CTL_LINES" | npat "$pat" -)" -eq 0 ]; then dead="$dead $pat"; fi
 done
 if [ -n "$dead" ]; then no "every write pattern matches its own control line  [dead:$dead]"
-elif [ "$hits" -eq 0 ]; then ok "no write pattern appears in any script source (20 patterns, each matched on its own control line)"
+elif [ "$hits" -eq 0 ]; then ok "no write pattern appears in any script source (20 patterns over five scripts, each matched on its own control line)"
 else no "no write pattern appears in any script source  [$hits hit(s)]"; fi
+# apply-palette.py is the one script here that writes, and only on request: it is excluded from
+# the grep above by design, so this leg keys on the property that still has to hold — a REFUSED
+# run leaves no trace. The manifest of a non-vault directory is unchanged across --apply.
+PMAN="$W/palette-target"; rm -rf "$PMAN"; mkdir -p "$PMAN/docs"; printf 'x\n' > "$PMAN/docs/readme.md"
+PBEFORE="$(manifest "$PMAN")"
+python3 "$PAL" --apply "$PMAN" > /dev/null 2>&1
+python3 "$PAL" --apply --vault "$PMAN" > /dev/null 2>&1
+PAFTER="$(manifest "$PMAN")"
+if [ "$(hashes "$PBEFORE")" -ge 1 ] && [ "$PBEFORE" = "$PAFTER" ]
+then ok "a refused apply-palette.py run leaves the non-vault directory byte-identical"
+else no "a refused apply-palette.py run leaves the directory unchanged  [$(hashes "$PBEFORE") before, $(hashes "$PAFTER") after]"; fi
 
 N=$((PASS + FAIL))
 printf '\n'

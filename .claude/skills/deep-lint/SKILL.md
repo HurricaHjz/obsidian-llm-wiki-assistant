@@ -87,7 +87,7 @@ exempt), unresolved `## Conflicts / Open Questions`, and the gap scan. Fix the c
   count of **project-declared** MCP servers (`.mcp.json` / project settings; report `0 declared`, not
   a bare `0` — user-level servers load into the session too and this probe does not see them, so a
   bare zero would overstate what was checked) — and report the absolute total as ≈ tokens/request
-  (bytes ÷ 4). Then **reconcile composition — never threshold the total** (CLAUDE.md §12: a growth
+  (bytes ÷ 4). Report `wiki/index.md` beside it as entries × bytes-per-entry (`grep -c '^- \[\['` and `wc -c`) and attribute the delta since the last entry to new entries versus densification (the registry-read-policy page, its growth section). Then **reconcile composition — never threshold the total** (CLAUDE.md §12: a growth
   threshold converts sanctioned change into alarm; the retired >10% flag fired on 2 of its 3 runs and
   moved nothing). Diff each layer against the per-file figures in the previous deep-lint entry
   (`grep "prefix budget:" wiki/log.md | tail -1`; first run, or first after a format change, =
@@ -115,6 +115,29 @@ The ledger is the run's first LLM-read priority.
   ready-to-issue instruction naming its design doc where one exists (e.g. "fix the X defects per
   their design doc under `wiki/developments/`") — mirroring the ready-to-issue `/attic` suggestions
   in Step 4. Fixes themselves stay propose-only under CLAUDE.md §12.
+- **Spawn-record review (2026-09-06; carries the instrument rule's over-calling guard and the per-call
+  model-and-effort rule's pick guard).** Head-side, never routed — the records live outside the vault
+  at `~/.llm-wiki/spawn-records/<run>.jsonl`, beyond any lane's grants — and scripted:
+  `python3 .claude/skills/deep-lint/spawn-record-review.py` (report-only; `--json` for the structure;
+  `PROBE FAILED` and exit 2 on a missing records directory or an unreadable `routing.json`). It reads
+  every record whose run opened on or after this log's last `deep-lint |` entry (no such entry: the
+  whole history, said once; a resumed run is re-reviewed and labelled), tallies each run's
+  instrument-rule letters, and per lane checks the recorded pick against the line's `row_default`
+  (older lines re-resolved from today's `routing.json` and labelled): under `default` a model or
+  effort below the row default must carry `<model> because` / `effort <x> because` in `reason`; a
+  floor the owner wrote (`cheap`, `fast`, `cheap-fast`) skips that axis and flags a pick above the
+  floor; `top` flags a pick below a ceiling; under `auto` (the default preset from 2026-09-08; on a
+  line carrying the wrapper's `model_src`) a departure from the anchor on either axis in either
+  direction must carry its reason (`model_src`/`effort_src` = `auto: <reason>`, or a non-empty
+  `choice_reason`), else the finding `auto pick without --choice-reason`. It lists unclosed lanes,
+  unread applied effort, unknown
+  classes, out-of-set picks and unparsed fields, and cross-checks `effort_applied` where the wrapper
+  read it. The phrase checks start at the script's `RULE_FROM` (the ship instant of
+  2026-09-06, carried by that `framework` entry's title; the suite asserts the two agree) and the
+  letter check at `LETTER_FROM` (2026-09-04, the instrument rule's date). Each FINDING line is a
+  `known-issues` entry, one per run; `no lanes this window` with the file count is the empty case.
+  Suite: `bash .claude/skills/deep-lint/test_deep_lint_scripts.sh` (its spawn-record legs plant every
+  branch). Design and derivation: `wiki/developments/per-call-model-selection-rule.md`.
 - **Routing (parity gate G6a, 2026-09-02).** *(applies under the `multi` regime, owner-set or head-resolved for the run under delegation `auto`; in `single` the head runs the step itself unless an instrument-rule reason holds — thin-lanes phase 4, 2026-09-04; delegation `auto` 2026-09-04)* The liveness check itself (is each `## Open` entry still live against its surface?) runs in a `verifier` lane with an explicit per-entry claim list and the two §11 controls; the head reads the verdicts, moves entries and keeps the fix-shape review. Gate evidence: two blind lanes reproduced the head's review of the 17 open entries (15 confirmed, 2 upstream-harness behaviours unverifiable from disk, 0 refuted).
 
 ### 3 — Confidence coverage & correctness (per CLAUDE.md §4.6)
@@ -262,7 +285,39 @@ The kit lives in `style-rerun/` beside this skill (its `README.md` explains it):
 ### 8 — Registries & report
 Update `index.md` for any pages added/renamed. Append one `deep-lint` entry to `log.md` (via shell).
 Produce a report: structural fixes, confidence changes (with before→after), stale flags, sources
-refreshed/skipped, qmd status.
+refreshed/skipped, qmd status, and the run's own cost.
+**Cost (2026-09-07, IDEAS №136).** The last act of the run is to meter it over its own window:
+`python3 -B .claude/skills/delegate/fable-share.py --session <sid> --vault . --start '<a phrase unique to the prompt that invoked this run>' --baseline 'deep-lint <date of the previous deep-lint entry>' --lanes auto --spawn-record <record>`
+— no `--end`: the meter runs as the run's last act, so the window closes at the transcript's last
+record (an `--end` marker in the report cannot match, since the report is not in the transcript
+until the reply that carries it is sent: `end marker not found`, exit 2, measured 2026-09-07);
+— `<sid>` is this run's session id: the id the harness shows for the conversation (a hook that
+prints it each turn is machine-local, never the source of record), or in a headless run the
+record's last head session: `session_id` on a `head-successor` or `head-resumed` event, `session`
+on a `run-resume` event;
+`<record>` is the run's spawn record when lanes ran, else pass `--lanes none` and no
+`--spawn-record`; add `--delegation <single|multi> --delegation-src <head|owner>` when the run
+resolved a regime. Read the exit code and the `window:` line before quoting anything: exit 0
+prints one `billed (list, prices <date>): head $X · lanes $Y · session $Z · …` line and a `window:`
+line naming the records metered (`start = marker "…" in a user message`) — a start that reads
+`matched on any record type, not a user message` or `further match(es) later, first taken` means
+the marker mis-hit and the window is not the run's: re-run with a longer phrase unique to the
+invoking message (an unmatched marker exits 2, `start marker not found`); exit 2 prints `fable share: unmetered (<reason>)` and no figure;
+a session the price table cannot price prints `billed: unbilled (<reason>)`, also exit 2. Whichever
+line came, carry it verbatim: print it at the close, put it under the report's `### Cost`, and
+append it, with the window (` · window: records a..b, <the start note>`) so two entries compare on
+the same footing, as the `- **Meter**: <line>` bullet of the run's `deep-lint` log entry (the key the log already uses
+for billed lines; single-quote the append, since a double-quoted `$X` expands to nothing) — the
+one entry CLAUDE.md §5 lets carry what the run's record needs, this entry being the run's only
+record. Monitor №15's cost-per-run series is then `grep -n 'billed (' wiki/log.md` over the
+`deep-lint |` entries. In the same step run
+`python3 -B .claude/skills/delegate/lane.py cost-figures --check 2>&1` (exit 0 when every block
+reads `same`, 1 on any drift or fold due — the expected case after a run — and 2 with `PROBE
+FAILED` on stderr) and put its per-class lines under `### Cost`: `same` needs nothing; a `drift` is re-folded by the head into `routing.json`'s
+`cost` block at this run's log entry (the delegate skill §2a rule: the rule unchanged, the figures
+refreshed, the new figures named in the entry); a `fold due` (a class newly at three completed
+lanes, so a new cap) is reported for the owner, never added here; `PROBE FAILED` is quoted as the
+check's own premise failure.
 
 ## Report format
 ```markdown
@@ -291,6 +346,9 @@ refreshed/skipped, qmd status.
 - skipped (Test unchanged since <date>) · or: N sessions on `<style>` judged blind, per role A1–A7 and B, better / same / worse than the previous run on content and plainness (never on length); filed at `output/style-rerun-<date>.md`
 ### qmd
 - updated + embedded (or: not enabled)
+### Cost
+- billed (list, prices <date>): head $X · lanes $Y · session $Z · rewrites k ($w) · … baseline <label> · window: records a..b, <the start note> (or: fable share: unmetered (<reason>) · or: billed: unbilled (<reason>))
+- class figures (`lane.py cost-figures --check`): N same · M drift (re-folded at this entry) · K fold due (for the owner) · P no block (n < 3) — or: PROBE FAILED (<what>)
 ```
 
 ## Hard constraints
@@ -305,5 +363,6 @@ refreshed/skipped, qmd status.
 - **IDEAS.md boundary:** the delegation covers the Monitor section ONLY, report-first; any IDEAS write
   is confirmed, "(agent)"-marked, in the reply's change table, and in the log entry. TODO/Ideas/Archive
   are never touched by this skill.
-- Append `## [YYYY-MM-DD] deep-lint | <summary>` to `wiki/log.md` (shell append, never Read+Edit).
+- Append `## [YYYY-MM-DD] deep-lint | <summary>` to `wiki/log.md` (shell append, never Read+Edit), its
+  `- **Meter**: <billed line>` bullet included (Step 8).
 - Report in **British/UK English**.

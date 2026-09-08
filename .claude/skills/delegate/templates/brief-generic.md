@@ -28,7 +28,9 @@ the granted-exception wording in brief-compile.md; never grant to any other lane
 GRANTS
 {{headless lanes: the read directories, the write scope and any add-on granted beyond the
 class row, each with its reason — so a refused path reads as a gap to report, never as a
-mistake to work around | in-session: "n/a — inherited"}}
+mistake to work around; every path and command literal, as the fence will see it — no `Let X =`
+shorthand and no pasteable placeholder, since a fenced lane copies a shorthand into a shell
+variable the fence reads as an ungranted root (eight denials, 2026-09-06) | in-session: "n/a — inherited"}}
 
 DECISIONS
 {{the run decisions that bear on this task, and what sibling lanes hold; "none" is a
@@ -43,6 +45,10 @@ CONTROL+: {{a probe that must hit}} in {{the file that must hold it — a real p
 Negative control: {{a planted pattern that must NOT hit / must be caught}}
 - {{Write lanes with a link whitelist: name the link-whitelist sweep and its planted-fake
   negative control | read-only lanes: "—"}}
+- Folds must parse: a count over a run ledger, a spawn record or any JSONL more than one
+  writer appends to reads every line with `json.loads` or `jq` before it counts; a key-pattern grep
+  is a locator, never a verdict (two writers spell one key two ways; a substring count read
+  5 of 8, 2026-09-01).
 
 {{PASTE templates/_inherited.md block}}
 {{extra role conduct | —}}

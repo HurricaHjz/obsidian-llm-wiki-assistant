@@ -1,8 +1,9 @@
 # Spawn brief — ingest verify prefill (the Verify step's lane; role delta only; shared conduct comes from _inherited.md)
 
 Fill `{{slots}}`; replace the paste marker with the `_inherited.md` block; delete
-`<!-- -->` lines before sending. Model: opus per call (tier verdicts are judgement claims —
-delegate skill §2; the throttle sets effort).
+`<!-- -->` lines before sending. Model and effort per call within the verifier's range (tier verdicts
+are judgement claims — delegate skill §2; the anchor is the reference; a headless spawn records the
+pick with `--choice-reason`, an in-session spawn on its slot-0 line as `model_src`/`effort_src`).
 
 ```
 You are verifier (definition: .claude/agents/verifier.md), lane {{LANE_ID}} of run

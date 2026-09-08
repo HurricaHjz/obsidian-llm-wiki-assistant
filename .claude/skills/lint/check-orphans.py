@@ -173,6 +173,18 @@ def is_exempt(rel):
     return parts[-1] in ("index.md", "log.md") or (len(parts) > 1 and parts[1] == "maps")
 
 
+def assert_vault_root(root):
+    """A root must hold raw/ AND wiki/ or the census refuses to run.
+
+    The 2026-08-26 standard, closed for the capture layer and swept here on 2026-09-07: fail
+    loud on stderr, never a wrong-tree scan that reports a clean vault on a scan of nothing.
+    """
+    if not all(os.path.isdir(os.path.join(root, d)) for d in ("raw", "wiki")):
+        print(f"PROBE FAILED: {root} is not a vault root (no raw/ or wiki/)", file=sys.stderr)
+        raise SystemExit(2)
+    return root
+
+
 def main():
     stdout_utf8()
     ap = argparse.ArgumentParser(description="Orphan (no-inbound-link) census for the wiki layer.")
@@ -181,9 +193,9 @@ def main():
                     help="output format (default: text)")
     args = ap.parse_args()
 
-    root = os.path.abspath(os.path.expanduser(args.vault))
+    root = assert_vault_root(os.path.abspath(os.path.expanduser(args.vault)))
     wiki = os.path.join(root, "wiki")
-    if not os.path.isdir(wiki):
+    if not os.path.isdir(wiki):   # unreachable while the root guard runs first; kept as depth
         print(f"PROBE FAILED: no wiki directory under {args.vault} (wrong root?)")
         return 2
 

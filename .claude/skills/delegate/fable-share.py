@@ -19,9 +19,11 @@ call count.
 It then prices that usage. After the unchanged `fable share:` line it prints
 
     billed (list, prices <date>): head $X · lanes $Y · session $Z · rewrites k ($w) ·
+    rewrite causes switch i lapse j limit k unknown l ·
     tool uses/call head <a> lanes <b> · delegation <single|multi> (<head|owner>)|unstated ·
     baseline <label|none> ·
-    lanes n (reasons: (a)×i (b)×j (c)×k (d)×l, none×m) · metered n of m recorded
+    lanes n (reasons: (a)×i (b)×j (c)×k (d)×l, none×m) ·
+    picks: <class> m a<i> r<j> l<k> · e a<i> r<j> l<k>; …; unrecorded <n> · metered n of m recorded
 
 and one line per model carrying that model's token quantities beside its dollars. The
 quantities are printed beside the dollars, never replaced by them: list prices are a proxy
@@ -60,6 +62,27 @@ Billing definitions, each with its derivation:
     20,000-token floor of the head-side probe that opened the question would have cut nothing.
     `rewrites k ($w)` counts those calls and prices their cache writes alone (the part of the
     call the rewrite added).
+  - rewrite cause — every counted rewrite carries exactly one of `switch`, `lapse`, `limit` or
+    `unknown`, so the four counts partition the rewrites total and change no figure. `switch`:
+    the model or the effort differs from that agent's previous call (effort as the transcript
+    records it; where neither call records one, the models alone are compared). `lapse`: the
+    gap from the previous call's first record to this one's exceeds the agent's cache tier —
+    5 minutes, or 1 hour where the run's spawn record says the lane ran at the 1-hour tier
+    (`lane-open`'s `cache_tier_expected`, or `lane-closed`'s `cache_write_tier`, naming `1h`);
+    an agent the record does not name is at 5 minutes unless its own transcript carries
+    1-hour cache writes, which is the same field the billed line prices as `write_1h`. Both
+    TTLs are the harness's documented cache tiers, the pair this script has always priced
+    apart (see the two `ephemeral_*_input_tokens` fields above and `prices.json`'s
+    `write_5m_mult` / `write_1h_mult`); neither is a threshold this script chose. `limit`: a
+    limit stop recorded in the run's spawn record (`stop-condition` with `which: limit`, or
+    `lane-closed` with `exit_class: limit`) falls inside the metered window AND inside this
+    call's own gap — the stop is paired with the call that followed it, never spread over
+    every rewrite of a run that hit a limit, which would leave the other three causes
+    unobservable. `unknown` is the residue and is a real answer: it says the transcript and
+    the record hold no cause, not that the call is unclassified. Precedence where more than
+    one holds: `limit`, then `switch`, then `lapse`. The causes are reported on the billed
+    line, in the per-agent table and under `rewrite_causes` in JSON (per agent and in the
+    totals); the rewrites total and its dollars are unchanged by any of it.
   - tool uses per call — distinct `tool_use` content blocks divided by de-duplicated calls,
     per agent kind (head, lanes). Counting is by block id across every record of a message,
     because the harness writes one transcript line per content block and the final record
@@ -67,10 +90,28 @@ Billing definitions, each with its derivation:
     ratio matches the harness's own per-lane `tool_uses` figure where a spawn record holds
     one (checked against one lane of run 2026-09-04: 22 of 22).
   - reason tally — the letters (a) to (d) read out of each `lane-open` event's `reason`
-    field in the run's spawn record (`--spawn-record`). A reason may name more than one
+    field in the run's spawn record (`--spawn-record`): the bracketed form anywhere in the
+    text, or a leading bare letter with a colon or a spaced dash (`a:`, `a —`, `a -`), the
+    letter's case ignored. A reason may name more than one
     letter, and each letter it names is counted, so the tally can exceed the lane count; a
     lane whose reason names none is counted under `none`. Without a spawn record the tally
     and the recorded-lane count both read `n/a`.
+  - picks — per class, how the model and effort each `lane-open` of the metered partition
+    recorded relate to the anchor the SAME event recorded (`row_default`), placed on the
+    routing order (`order.model`, `order.effort` of `routing.json` beside this script, or
+    `--routing PATH`): `a` anchor (equal), `r` raised (above it), `l` lowered (below it); `m`
+    is the model axis, `e` the effort axis; one clause per class in name order, a class with
+    no lane omitted. `unrecorded n` counts the lane-open events carrying no `model_src` /
+    `effort_src` — every lane opened before 2026-09-08, when lane.py began recording the
+    per-call pick under the owner's ruling of 2026-09-07 — and they count nowhere else; it is
+    never an error. `unplaced n` (printed only when non-zero) counts the axis values of
+    recorded events that the order or the event's own anchor cannot place. The direction is
+    computed from the event's own `row_default`, never re-resolved, so a later anchor move
+    rewrites no history. With no readable routing record the segment reads `picks:
+    unavailable (no routing record at <path>)` and every other figure prints as before;
+    without a spawn record it reads `picks: n/a`. JSON carries the same counts under `picks`
+    (`{"<class>": {"model": {anchor, raised, lowered}, "effort": {…}}, "unrecorded": n,
+    "unplaced": n}`, or null with `picks_unavailable` saying why).
 
 Lane discovery by id (`--spawn-record <path>`): an in-session lane is matched by its
 `agent_id` to `<project-dir>/<session>/subagents/<agent-id>.jsonl` — the session of its own
@@ -117,7 +158,13 @@ broken premise prints, exactly,
     fable share: unmetered (<reason>)
 
 and exits 2 — in text and JSON mode alike, so a consumer checks the exit code before
-parsing. Broken premises: the project directory or the session transcript is missing or
+parsing. One case is a skip rather than a failure: where `--spawn-record` names a record whose
+`run-open` marks the metered session as a launcher's placeholder (`session_kind: seed`, the
+wrapper's field and its two values `seed` and `head`), the session ran no turns and wrote no
+transcript, so the meter prints exactly `seed (skipped)` and exits 0 — JSON carries
+`skipped: "seed"` — and the caller counts it under skipped instead of recording a failed meter
+call. A record with `session_kind: head`, or with no such field, meters as it always has.
+Broken premises: the project directory or the session transcript is missing or
 unreadable; a marker does not match; the window holds no assistant record; the window is
 inverted; lane scanning finds no readable transcript at all; lane discovery finds a number
 of lanes other than --expect-lanes; a flag cannot yield a meaningful figure (a negative
@@ -152,7 +199,9 @@ unparseable line count, saying so when the final line is the torn one.
 
 One threshold classifies and none decides: the 0.9 of the rewrite definition above labels a
 call, changes no figure and blocks nothing, and it is stated with its derivation where it is
-defined. Every other number printed is measured from a transcript or priced from the dated
+defined. The two cache TTLs the causes compare a gap against (5 minutes and 1 hour) are the
+harness's documented tiers, not a choice made here, and they too only label an already counted
+rewrite. Every other number printed is measured from a transcript or priced from the dated
 table; the presentation constants are the single decimal place on the share percentage, the
 two on dollars and tool uses per call. Every default the script chooses (project directory,
 temporary root, lane mode, window bounds, matching fallbacks, price table, delegation
@@ -165,8 +214,17 @@ Usage (from anywhere; nothing is assumed about the working directory):
       [--expect-lanes <n>] [--baseline-output <n>] [--tmp-root <path>]
       [--format text|json] [--per-agent] [--spawn-record <path>]
       [--projects-root <path>] [--delegation single|multi --delegation-src head|owner]
-      [--state-dir <path>] [--baseline <label>] [--prices <path>]
+      [--state-dir <path>] [--baseline <label>] [--prices <path>] [--routing <path>]
 
+  --session takes a full transcript stem or a prefix of one (the eight characters a status
+  line shows are what an owner has to hand). A stem that names a file in the project directory
+  is used as it always was; otherwise the value is resolved as a prefix, first against
+  <project-dir>/<prefix>*.jsonl, then against <projects-root>/*/<prefix>*.jsonl — the same
+  order handsoff.py's transcript_for uses for a head started elsewhere. Exactly one match
+  resolves, and the resolved full id is what every line and the JSON payload then carry; zero
+  or several is a broken premise (the unmetered line on stdout, `PROBE FAILED: --session
+  <prefix> matches <k> transcripts under <root>` on stderr naming the count and, where there
+  are several, their stems) rather than a guess between transcripts.
   --project-dir defaults to the harness's mapping of the vault's absolute path: every
   character outside A-Za-z0-9- becomes a hyphen, under ~/.claude/projects/. The mapping was
   checked against every project directory of a harness home, comparing each transcript's own
@@ -203,7 +261,9 @@ Usage (from anywhere; nothing is assumed about the working directory):
   being compared against, `none` by default. All are printed and never interpreted: they
   exist so two runs are only ever compared on the same work, and the billed line's
   `(head|owner)` says whose choice the regime was. --prices overrides the price table path,
-  whose default is prices.json in this script's own directory.
+  whose default is prices.json in this script's own directory. --routing overrides the routing
+  record the picks tally takes its order from, whose default is routing.json in the same
+  directory; the path used is printed on the control line.
 """
 import argparse
 import glob
@@ -219,7 +279,11 @@ USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens",
 TIER_5M = "ephemeral_5m_input_tokens"
 TIER_1H = "ephemeral_1h_input_tokens"
 ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]")
-REASON_RE = re.compile(r"\(([a-d])\)")
+REASON_RE = re.compile(r"\(([a-dA-D])\)")
+# A leading bare letter followed by a colon or a spaced dash (`a:`, `a —`, `a -`): the forms two
+# heads wrote live, which the bracketed pattern alone read as `none` (register, 2026-09-06).
+# lane.py's REASON_LEAD_RE is the twin that refuses a reason carrying none of the forms.
+REASON_LEAD_RE = re.compile(r"^\s*([a-dA-D])\s*(?::|[\u2014-](?=\s|$))")
 DELEGATION_RE = re.compile(r"^\s*[-*]\s+\*\*delegation\*\*:\s*([A-Za-z][\w-]*)")
 LEGACY_MODE_RE = re.compile(r"^\s*[-*]\s+\*\*mode\*\*:\s*([A-Za-z][\w-]*)")   # the pre-rename line
 REGIMES = ("single", "multi")     # what a run actually runs under; `auto` is resolved to one per run
@@ -236,6 +300,17 @@ REGIMES = ("single", "multi")     # what a run actually runs under; `auto` is re
 # in the data. No token floor accompanies it: the smallest write the rule flagged in that
 # sweep was 45,318 tokens. It labels calls; it decides nothing.
 REWRITE_FRACTION = 0.9
+# The two cache tiers the harness documents and this script has always priced apart (the
+# `ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens` fields of a usage record, and the
+# `write_5m_mult` / `write_1h_mult` rates of prices.json): 5 minutes and 1 hour. They are read
+# here as the TTL a gap is compared against when a rewrite is given its cause. Neither number
+# is chosen by this script, and neither decides anything: they label a rewrite already counted.
+CACHE_TIER_5M_S = 300
+CACHE_TIER_1H_S = 3600
+# The causes a counted rewrite can carry, in the precedence they are tested in. They partition
+# the rewrites total: every counted rewrite takes exactly one, so the four counts sum to it.
+REWRITE_CAUSES = ("limit", "switch", "lapse", "unknown")
+CAUSE_ORDER = ("switch", "lapse", "limit", "unknown")   # the order they are reported in
 # The known-positive price control, run on every invocation. One call on a Fable id:
 #   1,000,000 input   -> 1.000 * 10.000            = 10.00
 #     400,000 read    -> 0.400 * 10.000 * 0.025    =  0.10
@@ -428,15 +503,53 @@ def read_transcript(path, start_marker=None, end_marker=None):
     return rows, stats
 
 
-def aggregate(rows):
+def rewrite_cause(model, effort, stamp, previous, tier_s, limit_stamps):
+    """Why this counted rewrite rewrote its context. Exactly one cause, so the causes partition
+    the rewrites total; the call is already counted and no figure moves either way.
+
+    `previous` is (model, effort, timestamp) of the same agent's previous call. Precedence:
+      limit  — a limit stop from the run's spawn record falls in this call's own gap. Paired
+               with the call that followed the stop rather than with every rewrite of the run,
+               so a run that hit a limit still shows its switches and lapses.
+      switch — the model differs, or the effort does where either call records one. A pair
+               that records no effort at all is compared on models alone, since an absent
+               field is not evidence of a change.
+      lapse  — the start-to-start gap exceeds the agent's cache tier (CACHE_TIER_*_S), so the
+               entry the next call would have read had expired.
+      unknown— the residue: the transcript and the record hold no cause. A real answer.
+    A cause needing a timestamp this transcript does not carry is not claimed: it falls
+    through to the next test rather than being guessed at.
+    """
+    prev_model, prev_effort, prev_stamp = previous
+    if stamp is not None and prev_stamp is not None:
+        if any(prev_stamp < stop <= stamp for stop in limit_stamps):
+            return "limit"
+    if model != prev_model:
+        return "switch"
+    if (effort is not None or prev_effort is not None) and effort != prev_effort:
+        return "switch"
+    if (stamp is not None and prev_stamp is not None
+            and (stamp - prev_stamp).total_seconds() > tier_s):
+        return "lapse"
+    return "unknown"
+
+
+def aggregate(rows, tier_s=None, limit_stamps=()):
     """Dedupe assistant rows by message id, keeping the final usage record per id, then sum.
 
     Tool-use blocks are the exception to "final record wins": they are collected over every
     record of a message id (see tool_ids), because each record carries one block.
+
+    `tier_s` is the agent's cache tier in seconds where the run's spawn record names it, and
+    None where nothing does — then the transcript decides: an agent with any 1-hour cache
+    write ran at the 1-hour tier, else the 5-minute one. `limit_stamps` are the run's limit
+    stops inside the metered window. Both feed rewrite_cause and nothing else: no token, no
+    dollar and no call count depends on either.
     """
     final = {}
     order = []
     tools = {}
+    starts = {}
     raw = 0
     bad_usage = 0
     for index, row in enumerate(rows):
@@ -452,13 +565,27 @@ def aggregate(rows):
         if key not in final:
             order.append(key)
         final[key] = row
+        # The call's start, for the gap a lapse is measured over: the FIRST record the harness
+        # wrote for this message id, not the final one dedup keeps, since a long turn's final
+        # record lands well after the call began.
+        if key not in starts and row.get("ts") is not None:
+            starts[key] = row["ts"]
         if row.get("tools"):
             tools.setdefault(key, set()).update(row["tools"])
+    tier_src = "spawn record"
+    if tier_s is None:
+        one_hour = any(row.get("tiers") and row["tiers"][1] for row in final.values())
+        tier_s = CACHE_TIER_1H_S if one_hour else CACHE_TIER_5M_S
+        tier_src = ("transcript 1-hour cache writes" if one_hour
+                    else "no record entry and no 1-hour write: the 5-minute tier")
     totals = {"calls": len(final), "records": raw, "output": 0, "flow": 0, "peak": 0,
               "models": {}, "efforts": {}, "bad_usage": bad_usage, "partial_usage": 0,
               "per_model": {}, "tool_uses": 0, "untiered": 0, "first_prefix": 0,
-              "rewrites": 0, "rewrite_tiers": {}}
+              "rewrites": 0, "rewrite_tiers": {},
+              "rewrite_causes": {cause: 0 for cause in CAUSE_ORDER},
+              "cache_tier_s": tier_s, "cache_tier_src": tier_src}
     previous_context = None
+    previous_call = (None, None, None)
     for position, key in enumerate(order):
         row = final[key]
         inp, cache_write, cache_read, out = row["usage"]
@@ -502,7 +629,12 @@ def aggregate(rows):
             tier = totals["rewrite_tiers"].setdefault(model, {"write_5m": 0, "write_1h": 0})
             tier["write_5m"] += w5
             tier["write_1h"] += w1
+            # One cause per counted rewrite, so the four counts sum to the total above.
+            cause = rewrite_cause(model, row.get("effort"), starts.get(key), previous_call,
+                                  tier_s, limit_stamps)
+            totals["rewrite_causes"][cause] += 1
         previous_context = context
+        previous_call = (model, row.get("effort"), starts.get(key))
     return totals
 
 
@@ -850,10 +982,19 @@ def read_spawn_record(path):
     a resume naming a lane the record never opened is counted, never invented. A record with
     no marker at all is one partition, matched against whatever session is being metered —
     the shape every record had before run markers were read.
+
+    Two more fields are read, for the rewrite causes and nothing else: a lane's cache tier
+    (`lane-open`'s `cache_tier_expected`, or `lane-closed`'s `cache_write_tier`, naming `1h`),
+    and the run's limit stops (`stop-condition` with `which: limit`, and `lane-closed` with
+    `exit_class: limit`) as a list of timestamps. A limit stop with no parseable timestamp
+    cannot be paired with a call and is dropped rather than placed by guess. From 2026-09-08
+    each lane also carries `pick`, the lane-open's per-call pick fields for the picks tally
+    (see pick_fields); nothing else reads them.
     """
     lanes = []
     index = {}
     by_name = {}
+    limit_stops = []
     unparseable = 0
     unopened_resumes = 0
     partitions = [{"kind": "none", "session": None}]
@@ -882,8 +1023,11 @@ def read_spawn_record(path):
             elif event == "lane-open" and name is not None:
                 name = str(name)
                 reason = rec.get("reason")
+                tier = rec.get("cache_tier_expected")
                 lane = {"name": name, "reason": reason if isinstance(reason, str) else "",
                         "agent_id": None, "session_id": None, "partition": current,
+                        "cache_tier": tier if isinstance(tier, str) else None,
+                        "pick": pick_fields(rec),
                         "spans": [{"partition": current, "ts": parse_ts(rec.get("ts")),
                                    "event": "lane-open"}]}
                 lanes.append(lane)
@@ -905,6 +1049,19 @@ def read_spawn_record(path):
                                       "event": "lane-resumed"})
                 if lane["session_id"] is None and isinstance(rec.get("session_id"), str):
                     lane["session_id"] = rec["session_id"]
+            elif event == "lane-closed":
+                lane = by_name.get(str(name)) if name is not None else None
+                written = rec.get("cache_write_tier")
+                if lane is not None and isinstance(written, str) and "1h" in written:
+                    lane["cache_tier"] = written
+                if rec.get("exit_class") == "limit":
+                    stamp = parse_ts(rec.get("ts"))
+                    if stamp is not None:
+                        limit_stops.append(stamp)
+            elif event == "stop-condition" and rec.get("which") == "limit":
+                stamp = parse_ts(rec.get("ts"))
+                if stamp is not None:
+                    limit_stops.append(stamp)
             elif event == "lanes-spawned" and isinstance(rec.get("lanes"), dict):
                 for key, value in rec["lanes"].items():
                     lane = index.get((current, str(key)))
@@ -912,7 +1069,74 @@ def read_spawn_record(path):
                         continue
                     if lane["agent_id"] is None:
                         lane["agent_id"] = value
-    return lanes, unparseable, partitions, has_markers, unopened_resumes
+    return lanes, unparseable, partitions, has_markers, unopened_resumes, sorted(limit_stops)
+
+
+def seed_sessions(path):
+    """The sessions a spawn record marks as a launcher's placeholder: `session_kind: seed` on a
+    `run-open` event (the wrapper's field, values `seed` and `head`).
+
+    A seed session starts the run and ends; it runs no turns and no transcript is ever written
+    for it, so metering it is a category error rather than a failure. Unreadable or malformed
+    here is not the place to fail — the record's own premises are checked below, in the order
+    they always were — so this returns what it could read and nothing else.
+    """
+    found = set()
+    try:
+        handle = open(os.path.expanduser(path), encoding="utf-8", errors="replace")
+    except OSError:
+        return found
+    with handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict) or rec.get("event") != "run-open":
+                continue
+            if rec.get("session_kind") == "seed" and isinstance(rec.get("session"), str):
+                found.add(rec["session"])
+    return found
+
+
+def seeded(seeds, session):
+    """Whether this session is one the record marks seed: equal, or the eight-character prefix
+    relation session_matches already governs the run markers by."""
+    return any(recorded == session or session_matches(recorded, session) for recorded in seeds)
+
+
+def probe_failed(what):
+    """The lane-facing diagnostic on stderr. The meter's own unmetered line still goes to
+    stdout, so a consumer parsing stdout sees the shape it always has."""
+    note("PROBE FAILED: %s" % what)
+
+
+def resolve_short_session(project_dir, session, projects_root):
+    """Resolve a short --session (a prefix) to the one transcript it names.
+
+    Reached only when no <project-dir>/<session>.jsonl exists, so a full stem behaves exactly
+    as it always has. The search order mirrors handsoff.py's transcript_for: the project
+    directory being metered first, then every project directory under the projects root, for a
+    head started elsewhere. Exactly one hit resolves and its stem is returned; zero or several
+    is a broken premise, never a guess between transcripts — the stems are named so the caller
+    can pass a longer prefix.
+    """
+    for root, pattern in ((project_dir, os.path.join(project_dir, session + "*.jsonl")),
+                          (projects_root, os.path.join(projects_root, "*", session + "*.jsonl"))):
+        hits = sorted(glob.glob(pattern))
+        if len(hits) == 1:
+            return hits[0], os.path.basename(hits[0])[:-len(".jsonl")]
+        if hits:
+            stems = ", ".join(sorted(os.path.basename(hit)[:-len(".jsonl")] for hit in hits))
+            probe_failed("--session %s matches %d transcripts under %s: %s"
+                         % (session, len(hits), root, stems))
+            die("session prefix matches %d transcripts under %s: %s"
+                % (len(hits), root, stems))
+    probe_failed("--session %s matches 0 transcripts under %s" % (session, projects_root))
+    die("session transcript not found: %s%s"
+        % (os.path.join(project_dir, session + ".jsonl"), sibling_hint(project_dir, session)))
 
 
 def span_clip(spans, mine):
@@ -988,11 +1212,25 @@ def partition_label(partitions, indices, session):
     return "recorded under %d partitions of %s" % (len(indices), session[:8])
 
 
+def session_matches(recorded, session):
+    """A run marker's session id matches the metered session when equal, or when one is a
+    prefix (at least eight characters) of the other: the head writes run-open with the
+    eight-character prefix the status hook shows, the wrapper the full id (2026-09-06)."""
+    if not recorded or not session: return False
+    if recorded == session: return True
+    short, long_ = sorted((recorded, session), key=len)
+    return len(short) >= 8 and long_.startswith(short)
+
+
 def reason_tally(lanes):
     """The (a)-(d) letters of each lane's reason; a lane naming none counts under `none`."""
     tally = {"a": 0, "b": 0, "c": 0, "d": 0, "none": 0}
     for lane in lanes:
-        letters = set(REASON_RE.findall(lane.get("reason") or ""))
+        reason = lane.get("reason") or ""
+        letters = {letter.lower() for letter in REASON_RE.findall(reason)}
+        lead = REASON_LEAD_RE.match(reason)
+        if lead:
+            letters.add(lead.group(1).lower())
         if not letters:
             tally["none"] += 1
         for letter in letters:
@@ -1005,6 +1243,115 @@ def fmt_tally(tally):
         return "n/a"
     return "%s, none×%d" % (" ".join("(%s)×%d" % (letter, tally[letter])
                                           for letter in ("a", "b", "c", "d")), tally["none"])
+
+
+def pick_fields(rec):
+    """The per-call pick a `lane-open` recorded, as the picks tally reads it: the class, the two
+    values, the anchor the event itself recorded (`row_default`) and whether the event carries
+    the source fields lane.py writes from 2026-09-08 (`model_src`, `effort_src`). An event
+    without both is `unrecorded`, whatever else it holds."""
+    row_default = rec.get("row_default")
+
+    def text(key):
+        return rec[key] if isinstance(rec.get(key), str) else None
+    return {"class": text("class"), "model": text("model"), "effort": text("effort"),
+            "row_default": row_default if isinstance(row_default, dict) else None,
+            "recorded": isinstance(rec.get("model_src"), str)
+            and isinstance(rec.get("effort_src"), str)}
+
+
+def load_routing_order(path):
+    """(order, None): the routing record's `order.model` and `order.effort` lists, the strength
+    ranking the picks tally places each value on — or (None, why) when the record is missing,
+    unreadable, not JSON or without those lists. Never a premise failure of the meter: the
+    picks segment reads `unavailable (<why>)` and every other figure prints as before."""
+    if not os.path.isfile(path):
+        return None, "no routing record at %s" % path
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError) as exc:
+        return None, "routing record at %s unreadable: %s" % (path, exc)
+    order = data.get("order") if isinstance(data, dict) else None
+    if not isinstance(order, dict):
+        return None, "routing record at %s has no order" % path
+    for axis in ("model", "effort"):
+        values = order.get(axis)
+        if not isinstance(values, list) or not values \
+                or not all(isinstance(value, str) for value in values):
+            return None, "routing record at %s has no order.%s list" % (path, axis)
+    return {"model": list(order["model"]), "effort": list(order["effort"])}, None
+
+
+def pick_tally(lanes, order):
+    """(classes, counts). Per class, how each recorded lane-open's model and effort relate to
+    the anchor the same event recorded: `anchor` (equal), `raised` (above it in the routing
+    order), `lowered` (below it). The direction is read from the event's own `row_default`,
+    never re-resolved, so a later anchor move rewrites no history. `counts["unrecorded"]` is
+    the lane-open events carrying no source fields (every lane opened before 2026-09-08),
+    `counts["unplaced"]` the axis values of recorded events that the order or the event's own
+    anchor cannot place; neither is an error."""
+    classes = {}
+    counts = {"unrecorded": 0, "unplaced": 0}
+    for lane in lanes:
+        pick = lane.get("pick") or {}
+        if not pick.get("recorded"):
+            counts["unrecorded"] += 1
+            continue
+        per = classes.setdefault(pick.get("class") or "unknown",
+                                 {axis: {"anchor": 0, "raised": 0, "lowered": 0}
+                                  for axis in ("model", "effort")})
+        anchors = pick.get("row_default") or {}
+        for axis in ("model", "effort"):
+            value, anchor = pick.get(axis), anchors.get(axis)
+            if value not in order[axis] or anchor not in order[axis]:
+                counts["unplaced"] += 1
+                continue
+            delta = order[axis].index(value) - order[axis].index(anchor)
+            per[axis]["anchor" if delta == 0 else "raised" if delta > 0 else "lowered"] += 1
+    return classes, counts
+
+
+def fmt_picks(picks, unavailable):
+    """The picks segment of the billed line: `m` the model axis, `e` the effort axis, `a`/`r`/`l`
+    anchor/raised/lowered, one clause per class in name order, then `unrecorded n` and, only
+    when non-zero, `unplaced n`."""
+    if unavailable:
+        return "unavailable (%s)" % unavailable
+    if picks is None:
+        return "n/a"
+    classes, counts = picks
+    parts = []
+    for cls in sorted(classes):
+        per = classes[cls]
+        parts.append("%s m a%d r%d l%d · e a%d r%d l%d"
+                     % (cls, per["model"]["anchor"], per["model"]["raised"], per["model"]["lowered"],
+                        per["effort"]["anchor"], per["effort"]["raised"], per["effort"]["lowered"]))
+    parts.append("unrecorded %d" % counts["unrecorded"])
+    if counts["unplaced"]:
+        parts.append("unplaced %d" % counts["unplaced"])
+    return "; ".join(parts)
+
+
+def picks_payload(picks):
+    """The JSON form of the picks tally: the per-class objects beside `unrecorded` and `unplaced`."""
+    if picks is None:
+        return None
+    classes, counts = picks
+    payload = {cls: classes[cls] for cls in sorted(classes)}
+    payload.update(counts)
+    return payload
+
+
+def fmt_causes(causes):
+    """The four cause counts, always all four and always in the same order: they partition the
+    rewrites total, and a suppressed zero would hide which cause the run did not have."""
+    return " ".join("%s %d" % (cause, causes.get(cause, 0)) for cause in CAUSE_ORDER)
+
+
+def merge_causes(into, causes):
+    for cause, count in causes.items():
+        into[cause] = into.get(cause, 0) + count
 
 
 def fmt_ratio(tool_uses, calls):
@@ -1046,9 +1393,22 @@ def merge_per_model(into, totals):
             row[field] += value
 
 
+def skip_seed(session, args):
+    """The launcher placeholder: one line, exit 0, and no figure anywhere. Not a premise
+    failure — nothing is broken — so a caller counting failed meter calls counts a skip."""
+    if args.format == "json":
+        print(json.dumps({"session": session, "skipped": "seed",
+                          "spawn_record": args.spawn_record, "line": "seed (skipped)"},
+                         indent=2, sort_keys=True))
+    else:
+        print("seed (skipped)")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(add_help=True, description="Meter a delegated run's head and lane usage.")
-    ap.add_argument("--session", required=True, help="head session id (the transcript stem)")
+    ap.add_argument("--session", required=True,
+                    help="head session id: the transcript stem, or a unique prefix of one")
     ap.add_argument("--vault", default=".", help="vault root; the project directory is derived from it")
     ap.add_argument("--project-dir", default=None, help="override the derived project directory")
     ap.add_argument("--start", default=None, help="ISO timestamp or a text marker in the invoking user message")
@@ -1073,6 +1433,8 @@ def main():
                     help="where the head session's state file is read from (the anchor hook's directory)")
     ap.add_argument("--baseline", default=None, help="free text naming what this run is compared against")
     ap.add_argument("--prices", default=None, help="price table path (default: prices.json beside this script)")
+    ap.add_argument("--routing", default=None,
+                    help="routing record the picks tally takes its order from (default: routing.json beside this script)")
     args = ap.parse_args()
 
     if args.expect_lanes is not None and args.expect_lanes < 0:
@@ -1090,6 +1452,12 @@ def main():
     if not session or session in (".", "..") or any(sep in session for sep in separators):
         die("session must be a bare session id, not a path: %s" % args.session)
 
+    # A launcher's placeholder session is skipped, not failed: it wrote no transcript, so the
+    # check comes before the project directory and the transcript are looked for at all.
+    seeds = seed_sessions(args.spawn_record) if args.spawn_record else set()
+    if seeded(seeds, session):
+        return skip_seed(session, args)
+
     project_dir = args.project_dir or derive_project_dir(args.vault)
     derivation = "given" if args.project_dir else "derived from vault %s" % os.path.abspath(os.path.expanduser(args.vault))
     if not os.path.isdir(project_dir):
@@ -1097,7 +1465,12 @@ def main():
             % (derivation, project_dir, sibling_hint(project_dir, session)))
     session_path = os.path.join(project_dir, session + ".jsonl")
     if not os.path.isfile(session_path):
-        die("session transcript not found: %s%s" % (session_path, sibling_hint(project_dir, session)))
+        # Not a stem in this project directory: resolve it as a prefix, or fail naming what it
+        # matched. Every line below then carries the resolved full id, never the prefix.
+        session_path, session = resolve_short_session(
+            project_dir, session, os.path.expanduser(args.projects_root))
+        if seeded(seeds, session):
+            return skip_seed(session, args)
     try:
         rows, stats = read_transcript(session_path, args.start, args.end)
     except OSError as exc:
@@ -1122,15 +1495,18 @@ def main():
         mode, patterns = "globs", args.lanes
 
     record_lanes, record_paths, record_notes, tally = None, {}, None, None
+    picks, picks_unavailable = None, None
+    routing_path = args.routing or os.path.join(os.path.dirname(os.path.abspath(__file__)), "routing.json")
     record_selected, record_label, sessionless = None, None, 0
     unsplittable, unopened_resumes = 0, 0
+    limit_stops, limit_stamps = [], []
     if args.spawn_record is not None:
         record_path = os.path.expanduser(args.spawn_record)
         if not os.path.isfile(record_path):
             die("spawn record not found: %s" % record_path)
         try:
             (record_lanes, record_unparseable, partitions, has_markers,
-             unopened_resumes) = read_spawn_record(record_path)
+             unopened_resumes, limit_stops) = read_spawn_record(record_path)
         except OSError as exc:
             die("spawn record unreadable: %s (%s)" % (record_path, exc))
         if not record_lanes:
@@ -1142,7 +1518,7 @@ def main():
         # has one partition and it is this session's, which is how every record read before
         # run markers were understood.
         chosen = set()
-        mine = set(i for i, part in enumerate(partitions) if part["session"] == session)
+        mine = set(i for i, part in enumerate(partitions) if session_matches(part["session"], session))
         for lane in record_lanes:
             part = partitions[lane["partition"]]
             here = [span for span in lane["spans"] if span["partition"] in mine]
@@ -1177,7 +1553,24 @@ def main():
         record_notes["unopened_resumes"] = unopened_resumes
         record_notes["shared_lanes"] = len([lane for lane in record_selected if lane["clip"]])
         record_notes["unsplittable_lanes"] = unsplittable
+        record_notes["limit_stops"] = len(limit_stops)
         tally = reason_tally(record_selected)
+        # The picks tally needs the routing order to place a value against its anchor; a record
+        # it cannot read leaves the segment `unavailable` and nothing else on the line changes.
+        order, picks_unavailable = load_routing_order(routing_path)
+        if order is not None:
+            picks = pick_tally(record_selected, order)
+        # A limit stop can only have caused a rewrite of the session being metered when it fell
+        # inside that session's window; one outside is another session's and is dropped here.
+        limit_stamps = [stamp for stamp in limit_stops
+                        if win_start is not None and win_end is not None
+                        and win_start <= stamp <= win_end]
+        record_notes["limit_stops_in_window"] = len(limit_stamps)
+        if limit_stamps:
+            # The head is re-aggregated now the record's limit stops are known. The first pass
+            # above gates the empty-window premise, so the order premise failures print in is
+            # unchanged; only the rewrite causes differ between the two passes.
+            head = aggregate(rows[si:ei + 1], limit_stamps=limit_stamps)
 
     lanes = []
     scan = {"durable": 0, "volatile": 0, "recorded": 0, "candidates": 0, "unique": 0,
@@ -1228,7 +1621,13 @@ def main():
                 kept = [r for r in in_window if in_clip(r["ts"], found["clip"])]
                 outside = len(in_window) - len(kept)
                 in_window = kept
-            totals = aggregate(in_window)
+            # The lane's cache tier as the record has it (`1h` anywhere in the recorded value is
+            # the 1-hour tier), else None so the lane's own transcript decides.
+            recorded_tier = found.get("cache_tier") if found else None
+            lane_tier = None
+            if isinstance(recorded_tier, str) and recorded_tier:
+                lane_tier = CACHE_TIER_1H_S if "1h" in recorded_tier else CACHE_TIER_5M_S
+            totals = aggregate(in_window, tier_s=lane_tier, limit_stamps=limit_stamps)
             if totals["calls"] == 0:
                 scan["no_window_records"] += 1
                 continue
@@ -1291,6 +1690,7 @@ def main():
     agents, unknown_models, unpriced = [], set(), {}
     head_usd = lane_usd = rewrite_usd = 0.0
     rewrites = 0
+    causes = {cause: 0 for cause in CAUSE_ORDER}
     per_model = {}
     untiered = head["untiered"]
     if table is not None and unbilled is None:
@@ -1299,6 +1699,7 @@ def main():
             usd, rew_usd, unknown = price_agent(totals, table)
             unknown_models |= unknown
             rewrites += totals["rewrites"]
+            merge_causes(causes, totals["rewrite_causes"])
             rewrite_usd += rew_usd
             merge_per_model(per_model, totals)
             if kind == "lane":
@@ -1310,6 +1711,9 @@ def main():
                            "calls": totals["calls"], "first_call_prefix": totals["first_prefix"],
                            "peak": totals["peak"], "output": totals["output"],
                            "tool_uses": totals["tool_uses"], "rewrites": totals["rewrites"],
+                           "rewrite_causes": dict(totals["rewrite_causes"]),
+                           "cache_tier_seconds": totals["cache_tier_s"],
+                           "cache_tier_source": totals["cache_tier_src"],
                            "usd": usd})
         if unknown_models:
             # 2026-09-04: price what matches and NAME the rest. A session whose every model is
@@ -1376,16 +1780,17 @@ def main():
     if unbilled is None:
         session_usd = head_usd + (lane_usd if mode != "none" else 0.0)
         billed_line = ("billed (list, prices %s): head $%.2f · lanes %s · session $%.2f · "
-                       "rewrites %d ($%.2f) · tool uses/call head %s lanes %s · delegation %s · "
-                       "baseline %s · lanes %s (reasons: %s) · %s"
+                       "rewrites %d ($%.2f) · rewrite causes %s · "
+                       "tool uses/call head %s lanes %s · delegation %s · "
+                       "baseline %s · lanes %s (reasons: %s) · picks: %s · %s"
                        % (table["prices_date"], head_usd,
                           "not scanned" if mode == "none" else "$%.2f" % lane_usd,
-                          session_usd, rewrites, rewrite_usd,
+                          session_usd, rewrites, rewrite_usd, fmt_causes(causes),
                           fmt_ratio(head["tool_uses"], head["calls"]),
                           "n/a" if mode == "none" else fmt_ratio(lane_tools, lane_calls),
                           delegation_clause, baseline_label,
                           "not scanned" if mode == "none" else len(lanes),
-                          fmt_tally(tally), metered_clause))
+                          fmt_tally(tally), fmt_picks(picks, picks_unavailable), metered_clause))
         if unpriced:
             billed_line += " · unpriced %s" % ", ".join(
                 "%s (%d call%s)" % (m, n, "" if n == 1 else "s") for m, n in unpriced.items())
@@ -1415,6 +1820,7 @@ def main():
             return 2
         payload = {
             "session": session,
+            "session_given": args.session.strip(),      # the prefix, where one was passed
             "project_dir": project_dir,
             "project_dir_source": derivation,
             "window": {"start_index": si, "end_index": ei,
@@ -1460,6 +1866,10 @@ def main():
                 "rewrites": rewrites,
                 "rewrites_usd": round(rewrite_usd, 6),
                 "rewrite_fraction": REWRITE_FRACTION,
+                "rewrite_causes": causes,
+                "cache_tier_5m_seconds": CACHE_TIER_5M_S,
+                "cache_tier_1h_seconds": CACHE_TIER_1H_S,
+                "limit_stops_in_window": len(limit_stamps),
                 "tool_uses_head": head["tool_uses"],
                 "tool_uses_lanes": lane_tools,
                 "tool_uses_per_call_head": (None if not head["calls"]
@@ -1480,6 +1890,9 @@ def main():
                 "metered_lanes_unrecorded": unrecorded_metered,
                 "lane_count_mismatch": mismatch,
                 "reason_tally": tally,
+                "picks": picks_payload(picks),
+                "picks_unavailable": picks_unavailable,
+                "picks_routing": routing_path,
                 "spawn_record": args.spawn_record,
                 "spawn_record_resolution": record_notes,
                 "untiered_write_records": untiered,
@@ -1540,21 +1953,23 @@ def main():
     print(billed_line)
     for text in model_lines:
         print(text)
-    print("billed control: prices from %s · %s · delegation from %s · %s"
+    print("billed control: prices from %s · %s · delegation from %s · %s · picks order from %s"
           % (prices_path, control_note, delegation_from,
              "every cache write tiered from the transcript" if not untiered
              else "%s with no cache_creation tier, counted at the 5-minute rate"
-                  % plural(untiered, "call")))
+                  % plural(untiered, "call"), routing_path))
     if args.per_agent:
         width = max([len(agent["label"]) for agent in agents] + [5])
         print("per-agent (label · model(s) · calls · first-call prefix · peak context · "
-              "output · tool uses · list $):")
+              "output · tool uses · rewrites by cause · list $):")
         for agent in agents:
-            print("  %-*s · %s · %s · prefix %s · peak %s · out %s · tools %d · $%.2f"
+            print("  %-*s · %s · %s · prefix %s · peak %s · out %s · tools %d · "
+                  "rewrites %d (%s) · $%.2f"
                   % (width, agent["label"], fmt_models(agent["models"]),
                      plural(agent["calls"], "call"),
                      format(agent["first_call_prefix"], ","), format(agent["peak"], ","),
-                     format(agent["output"], ","), agent["tool_uses"], agent["usd"]))
+                     format(agent["output"], ","), agent["tool_uses"], agent["rewrites"],
+                     fmt_causes(agent["rewrite_causes"]), agent["usd"]))
     if delta is not None:
         print("head output delta vs baseline: %s" % format(delta, "+,"))
     return 0

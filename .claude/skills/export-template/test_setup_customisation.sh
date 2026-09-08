@@ -45,7 +45,7 @@ DUP=$(comm -12 <(grep '^### ' "$ROOT/$CUST" 2>/dev/null | sort) <(grep '^### ' "
 [ -z "$DUP" ]                                 && ok "no ### heading duplicated across the pair" || no "duplicated heading(s): $DUP"
 grep -q '\[\[About Me\]\]'    "$ROOT/$CUST" 2>/dev/null && ok "Related links [[About Me]] (no orphan)" || no "missing ## Related backlink"
 grep -q '^- \*\*role\*\*: generalist' "$ROOT/$CUST" 2>/dev/null && ok "role knob seeded in ## Settings" || no "role knob missing from ## Settings"
-grep -q '^- \*\*throttle\*\*: default' "$ROOT/$CUST" 2>/dev/null && ok "throttle knob seeded in ## Settings" || no "throttle knob missing from ## Settings"
+grep -q '^- \*\*throttle\*\*: auto' "$ROOT/$CUST" 2>/dev/null && ok "throttle knob seeded in ## Settings (auto, the default preset from 2026-09-08)" || no "throttle knob missing from ## Settings"
 grep -q '^- \*\*breadth\*\*: standard' "$ROOT/$CUST" 2>/dev/null && ok "breadth knob seeded in ## Settings" || no "breadth knob missing from ## Settings"
 grep -q '^- \*\*delegation\*\*: auto' "$ROOT/$CUST" 2>/dev/null && ok "delegation knob seeded in ## Settings (auto is the default)" || no "delegation knob missing from ## Settings"
 grep -q '^## Roles'           "$ROOT/$CUST" 2>/dev/null && ok "Roles section present"                  || no "Roles section missing"
@@ -69,7 +69,7 @@ grep -q 'a claim, never a label' "$ROOT/$CUST" 2>/dev/null && ok "status-line cl
 # unnoticed: its `mode` clause never reached the seed; critic CRIT-S4). Each leg first proves its live anchor hits.
 for anchor in 'The active role is the `role` value' '- **Plain and fluent in every reply to the owner' 'The four styles are one ladder along'; do
   LIVE_LINE=$(grep -F -m1 -e "$anchor" "$VAULT/$CUST" 2>/dev/null); SEED_LINE=$(grep -F -m1 -e "$anchor" "$ROOT/$CUST" 2>/dev/null)   # -e: an anchor may start with "-"
-  if [ -z "$LIVE_LINE" ]; then no "parity premise: live anchor not found ($anchor)"; elif [ "$LIVE_LINE" = "$SEED_LINE" ]; then ok "seed parity: '$anchor…' byte-identical to the live vault"; else no "seed parity: '$anchor…' drifts from the live vault (seed v live)"; fi
+  if [ -z "$LIVE_LINE" ]; then no "parity premise: live anchor not found ($anchor)"; elif [ "$LIVE_LINE" = "$SEED_LINE" ]; then ok "seed parity: '${anchor}…' byte-identical to the live vault"; else no "seed parity: '${anchor}…' drifts from the live vault (seed v live)"; fi
 done
 T=$(( $(grep -c 'Test:' "$ROOT/$CUST" 2>/dev/null || echo 0) + $(grep -c 'Test:' "$ROOT/$DEFS" 2>/dev/null || echo 0) ))
 [ "$T" -ge 6 ] && ok "per-style Test clauses seeded across the pair ($T lines)" || no "Test clauses missing ($T lines across pair, need >=6)"

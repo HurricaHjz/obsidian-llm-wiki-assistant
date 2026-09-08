@@ -205,6 +205,33 @@ flag "possibly live in another session" and let the owner decide (concurrent ses
 against this vault; resuming a live run would create a dual-writer race). The 60-minute line is
 judgement, loosely anchored to a once-observed ~30-minute cloud-sync materialisation lag.
 
+**A `ts` later than the shell clock is invalid — never "live".** Five lanes stamped ~6.5–7 h fast on
+2026-09-01, and a future stamp sits under the 60-minute line for ever, disabling the check it feeds. So
+age the latest event against the wall clock, comparing stamps as parsed instants (a string `max` ranks
+`+0100` above `+0000` for the same clock reading), and where the latest `ts` is later than now, or any
+stamp is unparseable or carries no UTC offset, fall back to the ledger file's mtime and name the source of
+the age in the report:
+```bash
+python3 -c "
+import datetime as dt, json, os, sys
+p=sys.argv[1]; now=dt.datetime.now(dt.timezone.utc); t=None; ts=''; bad_ts=''; skipped=0
+for line in open(p):
+    try: s=json.loads(line).get('ts','') or ''
+    except Exception: skipped += line.strip() != ''; continue
+    try: c=dt.datetime.fromisoformat(s)
+    except ValueError: c=None
+    if c is None or c.tzinfo is None: bad_ts = bad_ts or (s or 'absent'); continue
+    if t is None or c > t: t, ts = c, s
+bad = t is None or t > now or bad_ts != ''
+age=now.timestamp() - (os.path.getmtime(p) if bad else t.timestamp())
+print(('mtime (ts invalid: ' + (bad_ts or ts or 'absent') + ')') if bad else ('ts ' + ts),
+      round(age/60), 'min old ·', skipped, 'malformed line(s) skipped')" ~/.llm-wiki/ingest-runs/<run>.jsonl
+```
+The mtime is a fallback, not a clock: a ledger synced in from another machine can carry a preserved
+older stamp, so the age it yields may overstate how long the run has been quiet. Report a rejected
+stamp as "ledger clock rejected, mtime age <n> min" and let the owner decide, exactly as with a run
+inside the 60-minute window.
+
 **Completion gating (ungated mid-pipeline duties measure at 4% compliance here — so gate, don't
 trust habit):** the Step 8 report carries one mandatory line — `Run: <id> · <n> ledger events ·
 closed` — and the Step 5 log entry names the run id. A silent zero surfaces in the reply the
@@ -227,8 +254,10 @@ skill (routing, spawn slots, `brief-compile` template). Full rationale:
 3. **Lane shape.** `wiki-compile` under `brief-compile` + two added duties: **ledger appends**
    (`lane_open` · per-source checkpoints · `lane_close`) and **claims instead of shared-page writes**.
    Per-lane whitelist: its raw pairs (conversion writes — disjoint files), its source pages (sole
-   writer), the run ledger (append-only), and its own `index.md` source-heading lines + its own
-   `log.md` entry under the §2.2 ingest exception (anchored per-heading `Edit` + grep-verify).
+   writer), the run ledger (append-only), and, under the §2.2 ingest exception, its own
+   `index.md` source-heading lines by **anchored per-heading `Edit`** and its own `log.md`
+   entry by **shell append** (`cat >>`) — never an `Edit` on the log, which the harness
+   would make the lane read whole (600 kB+). Grep-verify both back and show the grep.
    Everything else: propose-don't-write.
 4. **Lanes never write shared-type pages** (entity/concept/model/benchmark — the true race surface).
    Each lane emits **claims** in its report AND **in full inside the `claims_emitted` checkpoint** —
@@ -280,7 +309,7 @@ Runs head-side after the lane closes and before the head accepts the run (Step 7
 Design: `wiki/developments/fable-minimising-routing.md`, protocol items 3, 4, 5, 6 and 9 (item 4's
 single-source form and item 3's mechanism delta are dated status facts there). **Routing (shipped
 2026-09-03, critic C15 folded; mode-gated 2026-09-04):** the scripts run in the head's shell (M0), the
-scoring runs in a `verifier` lane on opus (a per-call escalation inside that class's option set, since
+scoring runs in a `verifier` lane on opus (the class's default from 2026-09-06; before that a per-call escalation inside its option set, since
 tier verdicts are judgement claims — delegate skill §2), the verdict stays with the head (M2). The lane
 is the default under the `multi` regime; under `single` the head scores in-session **unless** an
 instrument-rule reason holds — and one always does when the compile itself was routed, since a verify
@@ -432,11 +461,49 @@ Otherwise (`.pdf`, `.pptx`, `.docx`, `.xlsx`, `.png`/`.jpg`, `.mp3`/`.wav`, `.ht
    w=len(t.split()) or 1; c=len(t); cjk=sum(1 for ch in t if '一'<=ch<='鿿')
    print(('COLLAPSED' if c/w>50 and cjk/max(c,1)<0.10 else 'ok'), round(c/w), 'chars/word')"
    ```
-   `COLLAPSED` → the source **cannot be research** (Depth override): compile at standard, say so in the
-   Step 8 report, and offer `--agent-convert` or a different capture route if the owner wants it quotable.
+   **The whole-file mean clears a partially collapsed file.** MarkItDown's table padding, reference lists
+   and prompt blocks restore enough whitespace to pull the ratio back under 50 while the running prose
+   stays space-stripped (2026-09-04, ten arXiv PDFs: `ok` at 8–17 chars/word, prose-only ratios 13–21).
+   So every converted file also takes probe (a) below, which decides; where the mean or (a) fires, run probe (b)
+   for the locators:
+   ```bash
+   # (a) run-word probe: letter runs of 25+ with no space in them, per 1,000 words.
+   python3 -c "
+   import re,sys
+   t=open(sys.argv[1],encoding='utf-8',errors='replace').read()
+   r=len(re.findall(r'[A-Za-z]{25,}',t)); w=len(t.split()) or 1
+   print(('COLLAPSED' if r>=10 and r*1000.0/w>5 else 'ok'), r, 'runs', round(r*1000.0/w,1), 'per 1k words')" "raw/<stem>.md"
+   # positive control on the same run — the register's own probe against a known-clean capture (defuddle
+   # or curl). `-c` counts matching LINES, not runs: 4 on a clean arXiv-HTML capture against 758 on the
+   # collapsed file measured 2026-09-07, so the control must sit far below the file under test.
+   grep -coE '[A-Za-z]{25,}' "raw/<a clean capture>.md"
+   # (b) per-line ratio over PROSE lines only — fences, |-rows, quotes, embeds and numbered
+   #     reference entries dropped, since their markup is what dilutes the whole-file mean.
+   #     (Both counts sit in their own variables: a `/` straight after `)` reads as a path to the lane
+   #     shell fence, which denies the whole command — verified 2026-09-07.)
+   python3 -c "
+   import re,sys
+   fence=False; bt=chr(96)*3
+   for n,l in enumerate(open(sys.argv[1],encoding='utf-8',errors='replace'),1):
+       s=l.strip()
+       if s.startswith(bt) or s.startswith('~~~'): fence = not fence; continue
+       if fence or len(s)<60 or s[:1] in '|>' or s.startswith('![') or re.match(r'^\[\d+\]',s): continue
+       c=len(s); w=len(s.split()) or 1
+       if c/w>50: print(n, round(c/w), s[:60])" "raw/<stem>.md"
+   ```
+   `COLLAPSED` from **either** the mean or probe (a) → the source **cannot be research** (Depth override):
+   compile at standard, say so in the Step 8 report, and offer `--agent-convert` or a different capture
+   route if the owner wants it quotable.
    A high ratio with ≥10% CJK is **not** a collapse — Chinese and Japanese have no inter-word spaces, so
    word counts are meaningless there while quoting works fine. (Threshold calibrated on this vault: real
-   collapses sit near 300–400 chars/word, ordinary English clips with long URLs reach 25.)
+   collapses sit near 300–400 chars/word, ordinary English clips with long URLs reach 25. The run rate is
+   calibrated on the same corpus, the 96 Markdown captures under `raw/2-papers/` on 2026-09-07: 76 sit
+   below 2 runs per 1,000 words and three at 2.2–2.5, the next value up is 10.6, and every file from
+   there up is a MarkItDown PDF conversion with space-stripped prose — 5 lies in the empty band between
+   the two populations, and the 10-run floor keeps a short clean capture off the gate, a clean defuddle
+   capture of an arXiv HTML page measuring 11 runs in 9,513 words. Probe (b) is read, never counted: on
+   the same corpus a clean capture carried up to 8 flagged lines, all glyph padding or data-URI blobs,
+   and a collapsed one as few as 8, so only (a) separates the two populations.)
 4. **Keep the original untouched.** The original and the converted `.md` are now a **pair**. For a
    URL source there is no local original — the converted `.md` is the only file; keep the URL in
    `converted_from`.
@@ -498,9 +565,27 @@ updated: <YYYY-MM-DD>
 the original (file path, or the URL for web/YouTube). Predict the post-sort paths (Step 6) so the
 links don't break after the move.
 
-**Routing (parity gates G3 and G4, 2026-09-02 — `wiki/developments/fable-minimising-routing.md`).** Gate evidence: G4 passed with both lane arms cleaner than the head arm (the lanes kept the paper's internal contradictions the head had restated) and carries the flag "passed against a head arm the record cannot certify as strong"; G3 passed on its second attempt, after two brief clauses, without that flag. The routed step is in force — its carriers shipped 2026-09-03: (a) `.claude/skills/delegate/templates/brief-compile.md` carries the two gate-added clauses (the source page states the source's own provenance — publisher, date, URL; any sentence about a linked page uses only that page's or the raw's words), the CONTEXT NOTES fidelity-plant slot and the `## Anomalies` report section; (b) the Verify step above scores every lane compile against the raw — fabrication · plant · coverage · tier · structure · integration · language · anomalies, plus `claims` in parallel mode — before the head accepts it. **Mode gate (2026-09-04):** this routed default applies under the `multi` regime (owner-set, or head-resolved for the run under delegation `auto`, 2026-09-04). Under `single` the head compiles in-session unless an instrument-rule reason holds for that source — a batch it cannot hold (reason (b), which is Parallel mode below), or context isolation its watermark bands demand (reasons (c)/(d)) — and it may propose ONE verify lane for a high-stakes in-head compile, once (delegate skill §1). Default executor for a single-source compile in `multi`: a `wiki-compile` lane on opus (the definition's default since 2026-09-02) at the run's authorised depth range — standard and research are gated (G3, G4); concise is ungated (a lane that chooses it is covered by the verify leg and the plant; the design page records the residual); every compile clears the design's ≈30k leave-the-head threshold by construction, since a compile loads `wiki/index.md` (≈27k tokens) before the source and its network pages, and the fresh-session head arm of 2026-09-03 spent 44k Fable output tokens on a 3.8 kB source — the derivation the cost rule requires; a 2–5 source `auto` batch routes one lane at a time (two routed lanes writing network pages concurrently is Parallel mode's race surface, and that shape takes Parallel mode's claims); the head keeps the resume pre-flight, the spawn record with its plant (echoed per `pre-report`; under `auto` the owner's `/ingest` invocation is the go for this single lane, whose whitelist is the ingest's own output — delegate skill §3 slot 0, dated clause), the Verify step and the close-out. When routed: the lane runs with the shape the gates tested — it writes the source page and the warranted network pages, its own index line and log entry under the §2.2 ingest exception, and sorts the raw; the head's post-lane check is the verify step plus Step 7's controls plus a full read of every page whose tier the lane raised (§4.6: delegation never raises a tier unread); §4.4 conflict settlement and the research-depth key-claim spot-check stay head-side; the head's close-out log entry, always written for a routed run beside the lane's, carries the verify verdict, the stamp mechanism and the `fable share` meter line; the spawn record keeps the plant and the full meter. **Re-gate runbook (rule 7; the G4 flag):** the second routed use at each depth re-runs the paired fixture form — the parity store's `g34v2` fixture builder, scope parser, verify-dir stager and verdict script — with a fresh-session head arm (`claude -p --model <fable id> --effort max` in a snapshot-equal fixture, its transcript effort confirmed) against two routed lanes on the current carriers; the routed-run register on the design page is the use counter. Standard depth's re-gate **passed 2026-09-03** (G3r, second attempt, after FIDELITY clause 3 was added; detail on the design page), so the routed default stands at standard depth; research depth's re-gate, carrying G4's flag, is the next research-depth compile.
+**Routing (parity gates G3 and G4, 2026-09-02 — `wiki/developments/fable-minimising-routing.md`).** Gate evidence: G4 passed with both lane arms cleaner than the head arm (the lanes kept the paper's internal contradictions the head had restated) and carries the flag "passed against a head arm the record cannot certify as strong"; G3 passed on its second attempt, after two brief clauses, without that flag. The routed step is in force — its carriers shipped 2026-09-03: (a) `.claude/skills/delegate/templates/brief-compile.md` carries the two gate-added clauses (the source page states the source's own provenance — publisher, date, URL; any sentence about a linked page uses only that page's or the raw's words), the CONTEXT NOTES fidelity-plant slot and the `## Anomalies` report section; (b) the Verify step above scores every lane compile against the raw — fabrication · plant · coverage · tier · structure · integration · language · anomalies, plus `claims` in parallel mode — before the head accepts it. **Mode gate (2026-09-04):** this routed default applies under the `multi` regime (owner-set, or head-resolved for the run under delegation `auto`, 2026-09-04). Under `single` the head compiles in-session unless an instrument-rule reason holds for that source — a batch it cannot hold (reason (b), which is Parallel mode below), or context isolation its watermark bands demand (reasons (c)/(d)) — and it may propose ONE verify lane for a high-stakes in-head compile, once (delegate skill §1). Default executor for a single-source compile in `multi`: a `wiki-compile` lane on opus (the definition's default since 2026-09-02) at the run's authorised depth range — standard and research are gated (G3, G4); concise is ungated (a lane that chooses it is covered by the verify leg and the plant; the design page records the residual); every compile clears the design's ≈30k leave-the-head threshold by construction, since a compile loads `wiki/index.md` (≈32k tokens at 127 kB, 2026-09-06; ≈27k when this line was written) before the source and its network pages, and the fresh-session head arm of 2026-09-03 spent 44k Fable output tokens on a 3.8 kB source — the derivation the cost rule requires; a 2–5 source `auto` batch routes one lane at a time (two routed lanes writing network pages concurrently is Parallel mode's race surface, and that shape takes Parallel mode's claims); the head keeps the resume pre-flight, the spawn record with its plant (echoed per `pre-report`; under `auto` the owner's `/ingest` invocation is the go for this single lane, whose whitelist is the ingest's own output — delegate skill §3 slot 0, dated clause), the Verify step and the close-out. When routed: the lane runs with the shape the gates tested — it writes the source page and the warranted network pages, its own index line and log entry under the §2.2 ingest exception, and sorts the raw; the head's post-lane check is the verify step plus Step 7's controls plus a full read of every page whose tier the lane raised (§4.6: delegation never raises a tier unread); §4.4 conflict settlement and the research-depth key-claim spot-check stay head-side; the head's close-out log entry, always written for a routed run beside the lane's, carries the verify verdict, the stamp mechanism and the `fable share` meter line; the spawn record keeps the plant and the full meter. **Re-gate runbook (rule 7; the G4 flag):** the second routed use at each depth re-runs the paired fixture form — the parity store's `g34v2` fixture builder, scope parser, verify-dir stager and verdict script — with a fresh-session head arm (`claude -p --model <fable id> --effort max` in a snapshot-equal fixture, its transcript effort confirmed) against two routed lanes on the current carriers; the routed-run register on the design page is the use counter. Standard depth's re-gate **passed 2026-09-03** (G3r, second attempt, after FIDELITY clause 3 was added; detail on the design page), so the routed default stands at standard depth; research depth's re-gate, carrying G4's flag, is the next research-depth compile.
 
 ### Step 4 — Network the knowledge (entities · tools · concepts · models · benchmarks)
+
+**Index read modes for a whole ingest run (CLAUDE.md §5).** Read `section` for the five types this step
+matches against, and `name` for the three it only checks membership in. Never `route`: an ingest knows
+its types, so the whole file is waste — but a section list that is *wrong* loses recall silently, so
+these eight rows are the whole list; a step that needs a section outside them says so in its report and takes `route` for that step alone.
+
+| `## ` section | Mode | Why | Write |
+|---|---|---|---|
+| Entities · Tools · Concepts · Models · Benchmarks | `section` (46.6 kB, 37 % of the file) | the only types a source shares with existing pages, so the only place duplication is the risk (§4.5) | free |
+| Sources | `name` (10.3 kB) | sibling-source links in the new page's `## Related` and name canonicalisation (291 of 348 source pages link another source); de-dup is the pre-flight's grep over `wiki/sources/` frontmatter, never this read; a source never merges into another, so the 53 kB of descriptions is not needed | free |
+| Syntheses | `section` (4.2 kB; the names alone are 0.6 kB and carry no claim to contradict) | a new source can contradict an answer already filed; surface it as a §4.4 conflict | **ask** |
+| Maps | `name` (0.1 kB) | a source in a mapped cluster usually belongs on that map | **ask** |
+| Developments · User | `name` (2.3 kB + 0.05 kB) | framework records and the owner's profile: 34 of 348 source pages link a Developments page and 17 a User page from `## Related`, so the names are needed to link and to propose; the descriptions are not | **ask** |
+
+**"Ask" means propose, never write.** Those four are the owner's or a past decision's, so this step
+reports the proposed line and waits; `wiki/user/` already carries that rule in CLAUDE.md §1. A lane
+writes only what its brief whitelists, whatever this table says.
+
 For each entity → `wiki/entities/`, **tool** (software/app/plugin/skill/library/service) →
 `wiki/tools/`, concept → `wiki/concepts/`, **model** (any LLM named — e.g. Qwen,
 GPT, Llama) → `wiki/models/`, **benchmark** (any eval dataset named — e.g. AIME, GSM8K, GPQA) →
@@ -570,6 +655,7 @@ rename an unwieldy auto-generated clip filename to a clean kebab-case slug as pa
 | video / podcast / audio / lecture transcript | `raw/8-transcripts/` |
 | peer review / OpenReview page / rebuttal / meta-review | `raw/7-reviews/` |
 | owner-authored original work (research outline / draft / paper / thesis) | `raw/9-originals/` |
+| a repo pack (`repo-pack` engine) of the owner's OWN repository — a project-store snapshot; authorship outranks form, so never `4-webinfo/` (tie rule, 2026-09-07) | `raw/9-originals/` |
 | none of the above / deprecated | `raw/archives/` |
 | confirmed duplicate (ignored / not useful) | `raw/duplicates/` |
 

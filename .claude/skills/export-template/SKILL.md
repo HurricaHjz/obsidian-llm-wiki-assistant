@@ -16,7 +16,7 @@ user-invocable: true
 # export-template — produce / sync the shareable framework repo
 
 ## Goal
-Turn this private vault into the public **obsidian-llm-wiki-assistant** framework — **without any knowledge** (no
+Turn this private vault into the public **second-yourself** framework — **without any knowledge** (no
 wiki pages, raw sources, logs, or personal data) but **with** the engine (CLAUDE.md, MANUAL.md, the
 skills, the graph config), an empty folder skeleton, a tracked **demo** (`examples/seed/`), a **setup.sh**
 bootstrap, an **MIT** licence + README, and a **.gitignore that tracks the framework and ignores all
@@ -58,7 +58,7 @@ the seed demo) **plus** the build machinery from this skill's `payload/` (.gitig
 into your existing clone — leaving `.git/` and all knowledge untouched. Then run the **guided publish
 flow** below. (`--sync` is a back-compat alias.)
 ```bash
-bash .claude/skills/export-template/export_template.sh --push /path/to/obsidian-llm-wiki-assistant
+bash .claude/skills/export-template/export_template.sh --push /path/to/second-yourself
 ```
 
 **`--pull <repo>` — repo → vault (update from a newer version).** `git pull`s your clone, then **previews**
@@ -67,8 +67,8 @@ framework into your vault (incl. `README.md`/`LICENSE.md` + `assets/` at the vau
 refresh the `payload/` machinery. Add `--with-graph` to also pull `.obsidian/graph.json` (the colour scheme);
 `app.json`/appearance/core-plugins are **never** pulled.
 ```bash
-bash .claude/skills/export-template/export_template.sh --pull /path/to/obsidian-llm-wiki-assistant            # preview
-bash .claude/skills/export-template/export_template.sh --pull /path/to/obsidian-llm-wiki-assistant --apply    # apply
+bash .claude/skills/export-template/export_template.sh --pull /path/to/second-yourself            # preview
+bash .claude/skills/export-template/export_template.sh --pull /path/to/second-yourself --apply    # apply
 ```
 
 **Fresh build (no flag)** — a standalone content-free copy (the very first publish, or inspection):
@@ -100,21 +100,40 @@ framework"), do it end-to-end but **pause once for confirmation before anything 
    git -C <repo> --no-pager diff --cached            # full diff (skip only if very large)
    ```
    **Show the user** this and state plainly what will be published.
-   **Personal-strings gate (mandatory, before the recap):** scan the **staged tree** — what will
-   actually ship — not the diff: `git -C <repo> grep -i --cached -e "<string>"` for every derived
-   personal string, plus one positive control (a string known to exist, e.g. `wiki`). **Derive the
-   strings at runtime, never hardcode them here** (they must not ship): the `agent_name` from
-   `CUSTOMISATION.md` frontmatter, the git handle/email local-part from the repo's config,
-   every component of the vault's absolute path (the `@`-led and other punctuation-led ones included:
-   a 2026-09-06 scan omitted them and missed a fixture hit), and any extra lines in `output/publish-gate-strings.txt`
-   (optional, owner-local, never shipped). Filter hits against `publish-allowlist.md` (in this skill
-   folder): every allowlisted line carries its justification and must itself be public-safe. Any
-   **unallowlisted** hit HALTS the publish for inspection; a hit adjudicated benign is added to the
-   allowlist with its reason, once, permanently; a provisional entry (an owner-ruled deferral of a class
-   fix to a named release) names its per-file counts and its expiry release, is removed by the release
-   that fixes its class, and a hit outside its files or above its counts stays unallowlisted. Zero
-   unallowlisted hits + control > 0 = gate passed.
-   **Throttle gate (mandatory, before the recap):** `python3 .claude/skills/delegate/throttle.py check --require default` must exit 0 on the vault — a template is never published with floor definitions, drifted tiers or a description naming a current tier; a `PROBE FAILED` halts the publish like any other gate failure.
+   **Drift check (2026-09-06):** before the recap, compare every staged file that also exists in the vault with its
+   vault copy (`cmp -s` per path from `git diff --cached --name-only`; files the export transforms, those with
+   `vault-local` blocks, differ by design) and list any other difference with both mtimes. A difference means the
+   vault changed after the overlay (a concurrent session edited a shipped file between overlay and commit on
+   2026-09-06): re-overlay and re-gate, or name the exclusion in the recap. Never commit a tree you have not compared.
+   **Payload gate (mandatory, before the recap, AFTER `git add -A`):**
+   `python3 .claude/skills/export-template/publish_guard.py <repo>` must exit 0. It reads the
+   staged tree from git's INDEX (the bytes a commit writes) and runs three probes: an absolute
+   path into a machine home directory in ANY file, binary content included; any non-text file
+   outside `assets/`, the payload's declared media directory; and any string identifying you —
+   the agent name, your git name, email local-part and handle, every component of the vault's
+   absolute path, your machine account, plus any line in `output/publish-gate-strings.txt` —
+   in a file's name or its bytes. Exit 1 is a finding and halts the publish like any other gate
+   failure; exit 2 is a `PROBE FAILED` premise break (an unstaged tree, an empty or partial
+   payload, a git error, a vault or allowlist it cannot read) and halts it too. The guard
+   exempts no file, its own script and suite included: a shipped file that must discuss a home
+   path assembles the example from parts rather than writing it as a literal. Scope is keyed on
+   the observable property, never a filename list, so the next artefact class halts without an
+   edit here. Quote both of its output lines in the recap. Suite: `test_publish_guard.sh`.
+   **What the gate leaves to you** (it derives and adjudicates; the judgement stays yours):
+   - **Extra strings only you can name** — an affiliation, a second handle, an ORCID — go one per
+     line in `output/publish-gate-strings.txt` (owner-local, never shipped, absent by default and
+     reported as absent on every run). Nothing else reaches the gate that the vault cannot derive.
+   - **An unallowlisted hit halts for inspection.** Judge it: fix the payload, or adjudicate it into
+     `publish-allowlist.md` with its reason, once, permanently. That file states its own format and
+     the guard parses it, so an entry that names no file or an unknown placeholder halts the gate.
+   - **A provisional entry** (an owner-ruled deferral of a class fix to a named release) carries
+     per-file occurrence counts. While the class is deferred those counts track the files' growth:
+     an over-cap finding on a file the entry already names is a count refresh, a hit in any other
+     file is a real finding.
+   - **Its expiry** is reported on every run. At the recap, once the candidate version is derived,
+     re-run with `--release <ver>`: a provisional entry the candidate has reached becomes a finding
+     and must be removed or re-adjudicated before the commit.
+   **Throttle gate (mandatory, before the recap):** `python3 .claude/skills/delegate/throttle.py check --require auto` must exit 0 on the vault (`auto` is the default preset from 2026-09-08; a vault still at `default` fails this gate until its owner runs `throttle.py set auto`) — a template is never published with floor definitions, drifted tiers or a description naming a current tier; a `PROBE FAILED` halts the publish like any other gate failure.
    **Candidate recap — mandatory final confirmation:** before committing, present the **candidate's
    row** — `Ver | Feature | What it does | What it achieves` — verified against the actual files/tests
    (never from memory). **Derive the version number from evidence, not memory**: read

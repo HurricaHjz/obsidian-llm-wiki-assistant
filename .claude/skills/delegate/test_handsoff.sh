@@ -331,6 +331,45 @@ def cmd_xscript(argv):
     out(path)
 
 
+def cmd_toolscript(argv):
+    """A transcript for the tool-call extraction (register entry 2026-09-07): an assistant
+    record of tool calls alone, one carrying prose AND a call, one whose command runs past the
+    300-character cut, a tool result that must stay out, and a harness injection. Six records:
+    2 extracted + 2 tool-call + 2 excluded, so a leg can check the arithmetic."""
+    recs = [
+        {"type": "user", "timestamp": "2026-09-07T10:00:00Z",
+         "message": {"role": "user",
+                     "content": [{"type": "text", "text": "the human turn asks"}]}},
+        {"type": "assistant", "timestamp": "2026-09-07T10:00:10Z",
+         "message": {"role": "assistant", "model": "claude-fixture-1", "content": [
+             {"type": "tool_use", "name": "Bash",
+              "input": {"command": "git status --porcelain", "description": "status"}},
+             {"type": "tool_use", "name": "Read", "input": {"file_path": "/fixture/page.md"}},
+             {"type": "tool_use", "name": "Grep",
+              "input": {"pattern": "needle", "output_mode": "content"}},
+             {"type": "tool_use", "name": "TodoWrite", "input": {"todos": []}}]}},
+        {"type": "assistant", "timestamp": "2026-09-07T10:00:20Z",
+         "message": {"role": "assistant", "model": "claude-fixture-1", "content": [
+             {"type": "text", "text": "the assistant answers in prose and edits"},
+             {"type": "tool_use", "name": "Edit",
+              "input": {"file_path": "/fixture/other.md", "old_string": "a", "new_string": "b"}}]}},
+        {"type": "user", "timestamp": "2026-09-07T10:00:30Z",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result",
+              "content": "the tool result never reaches the extraction"}]}},
+        {"type": "assistant", "timestamp": "2026-09-07T10:00:40Z",
+         "message": {"role": "assistant", "model": "claude-fixture-1", "content": [
+             {"type": "tool_use", "name": "Bash", "input": {"command": "y" * 400}}]}},
+        {"type": "user", "timestamp": "2026-09-07T10:00:50Z",
+         "message": {"role": "user",
+                     "content": [{"type": "text",
+                                  "text": "<system-reminder>injected</system-reminder>"}]}},
+    ]
+    path = transcript_path(argv[0])
+    write(path, "".join(json.dumps(r) + "\n" for r in recs))
+    out(path)
+
+
 def cmd_metascript(argv):
     """A transcript of injected user records only: nothing to extract, and not a failure."""
     recs = [
@@ -505,7 +544,7 @@ COMMANDS = {"handoff": cmd_handoff, "record": cmd_record, "append": cmd_append,
             "row": cmd_row, "section": cmd_section, "bullet": cmd_bullet,
             "manifest": cmd_manifest, "srcscan": cmd_srcscan, "xscript": cmd_xscript,
             "metascript": cmd_metascript, "replayscript": cmd_replayscript,
-            "json": cmd_json}
+            "toolscript": cmd_toolscript, "json": cmd_json}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
@@ -578,8 +617,30 @@ cat > "$WORK/bin/harness2" <<STUB2
 cat > "$WORK/harness2-stdin.txt"
 printf 'stub harness 2 started\n'
 STUB2
+
+# The viewer stubs (the console window, IDEAS №139 A2). AIMYTH_VIEWER_CMD replaces the whole
+# opener command, so with it set NO LEG OF THIS SUITE EVER REACHES osascript OR open AND NO
+# REAL TERMINAL WINDOW IS EVER OPENED. It is exported for every call below, and the legs that
+# test a failure point it at the failing stub or unset it with an empty PATH instead.
+# The recording stub appends its whole argv, one argument per line, to the file the current leg
+# named in AIMYTH_VIEWER_ARGV: a per-leg file, so a detached starter that opens late can never
+# land in a later leg's count.
+cat > "$WORK/bin/viewer-stub.sh" <<'VSTUB'
+#!/bin/sh
+for a in "$@"; do printf '%s\n' "$a" >> "$AIMYTH_VIEWER_ARGV"; done
+exit 0
+VSTUB
+cat > "$WORK/bin/viewer-fail.sh" <<'VFAIL'
+#!/bin/sh
+for a in "$@"; do printf '%s\n' "$a" >> "$AIMYTH_VIEWER_ARGV"; done
+printf 'stub viewer: this window refuses to open\n' >&2
+exit 1
+VFAIL
+mkdir -p "$WORK/nopath"          # an empty directory: PATH with neither osascript nor open
 chmod +x "$WORK/psclaude/ps" "$WORK/psnone/ps" "$WORK/bin/harness" "$WORK/bin/harness2" \
-         "$WORK/bin/stubhead"
+         "$WORK/bin/stubhead" "$WORK/bin/viewer-stub.sh" "$WORK/bin/viewer-fail.sh"
+export AIMYTH_VIEWER_CMD="$WORK/bin/viewer-stub.sh"
+export AIMYTH_VIEWER_ARGV="$WORK/viewer-default.argv"
 
 # The planted control for the source scan: two write lines aimed outside the temp root, which
 # the scan must catch. The target is assembled here rather than written out, so that this
@@ -656,6 +717,67 @@ fixture() { # $1 tag, $2 envelope, $3 optional dropped section
   rm -f "$REC"
   mk handoff "$HO" "${3:-}" >/dev/null
   mk record "$REC" "$1" "sid-$1" "$HO" "$2" >/dev/null
+}
+plain_fixture() { # $1 tag: the plain-lane-run shape — lane events, NO run-open, no hand-off
+  REC="$STORE/spawn-records/$1.jsonl"
+  rm -f "$REC"
+  "$PY" - "$REC" "$1" <<'PLAINREC'
+import json, os, sys, time
+
+path, run = sys.argv[1], sys.argv[2]
+base = time.time() - 3600
+
+
+def stamp(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(t))
+
+
+rows = [
+    {"event": "lane-open", "lane": "L1", "class": "builder", "model": "fable", "effort": "max"},
+    {"event": "lane-spawned", "lane": "L1", "session_id": "sid-plain-l1", "pid": 3001},
+    {"event": "lane-closed", "lane": "L1", "exit_class": "completed", "total_cost_usd": 2.50},
+    {"event": "lane-open", "lane": "L2", "class": "critic", "model": "opus", "effort": "max"},
+    {"event": "lane-closed", "lane": "L2", "exit_class": "error", "total_cost_usd": 1.25},
+    {"event": "lane-open", "lane": "L3", "class": "verifier", "model": "fable", "effort": "high"},
+]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w", encoding="utf-8") as fh:
+    for i, row in enumerate(rows):
+        row.update(ts=stamp(base + i * 60), run=run)
+        fh.write(json.dumps(row) + "\n")
+PLAINREC
+}
+arm_resume() { # $1 run: the pre-flight's limit-off (D42) — the grants file carries on_limit resume
+  run grants --run "$1" --on-limit resume
+  [ "$RC" = 0 ] || die "cannot arm on_limit resume for $1: $(cat "$WORK/both")"
+}
+gval() { "$PY" -c 'import json, sys; print(json.load(open(sys.argv[1])).get("on_limit"))' "$1"; }
+vval() { "$PY" -c 'import json, sys; print(json.load(open(sys.argv[1])).get("viewer"))' "$1"; }
+# The viewer stub's recording file, one per leg (see the stub above).
+VIEWER_ARGV="$WORK/viewer-default.argv"
+viewer_use() { VIEWER_ARGV="$WORK/viewer-$1.argv"; rm -f "$VIEWER_ARGV"
+               export AIMYTH_VIEWER_ARGV="$VIEWER_ARGV"; }
+viewer_calls() { if [ -f "$VIEWER_ARGV" ]; then grep -c . "$VIEWER_ARGV"; else echo 0; fi; }
+viewer_has() { [ -f "$VIEWER_ARGV" ] || return 1; grep -q -F -- "$1" "$VIEWER_ARGV"; }
+need_viewer_arg() { viewer_has "$1" || why="$why; the viewer stub was not called with '$1'"; }
+need_no_viewer() { n=$(viewer_calls)
+                   [ "$n" = "0" ] || why="$why; the viewer stub was called ($n arguments)"; }
+console_cmd() { printf '%s/spawn-records/%s-console.command\n' "$REALSTORE" "$1"; }
+# A live console to plant: a process whose command line carries the marker in one of the two
+# spellings, so console_alive() finds it exactly as it finds a real console.
+PLANTED=""
+plant_console() { # $1 run, $2 spelling (watch.py | handsoff.py)
+  case $2 in
+    handsoff.py) "$PY" -c 'import time; time.sleep(90)' handsoff.py watch --run "$1" & ;;
+    *)           "$PY" -c 'import time; time.sleep(90)' watch.py --run "$1" & ;;
+  esac
+  PLANTED=$!
+  sleep 1   # the process must be in the table before any probe reads it
+  kill -0 "$PLANTED" || die "the planted console for $1 died before the leg could probe it"
+}
+kill_console() {
+  if [ -n "$PLANTED" ]; then kill "$PLANTED"; wait "$PLANTED" || :; PLANTED=""; fi
+  return 0
 }
 
 printf 'handsoff.py suite · target %s\n' "$H"
@@ -890,6 +1012,66 @@ need_eq "$(mk rows "$HO" "Findings ledger")" "2" "ledger rows"
 need_eq "$(mk manifest "$WORK/handoffs" | grep rled3)" "$SUM_BEFORE" "hand-off checksum"
 verdict "ledger --dry-run: no row, no observation, no file change"
 
+# ------------------------------------------------- ledger --observation and the plain shape --
+# The plain-lane-run shape: a record lane.py opened, with lane events and no run-open. The legs
+# above are the control throughout — the same commands on a record that HAS a run-open.
+plain_fixture pled
+LINES_BEFORE=$(mk lines "$REC")
+HO_SUM_BEFORE=$(mk manifest "$WORK/handoffs")
+run ledger --run pled --observation "the head's peer name for this run"
+need_rc 0
+need_out "observation recorded"
+need_out "plain lane run (no run-open)"
+need_out "no hand-off row"
+need_eq "$(mk count "$REC" observation)" "1" "observation events"
+need_eq "$(mk field "$REC" observation what)" "the head's peer name for this run" "what"
+need_eq "$(mk field "$REC" observation phase)" "" "phase (empty without --phase)"
+need_eq "$(mk lines "$REC")" "$((LINES_BEFORE + 1))" "record lines"
+need_eq "$(mk manifest "$WORK/handoffs")" "$HO_SUM_BEFORE" "the hand-off directory's checksums"
+verdict "ledger --observation: one observation on a record with no run-open, phase empty, no hand-off row, exit 0"
+
+run ledger --run pled --observation "an observation with a phase" --phase 3
+need_rc 0
+need_eq "$(mk field "$REC" observation phase)" "3" "phase (given)"
+need_eq "$(mk count "$REC" observation)" "2" "observation events"
+verdict "ledger --observation --phase: the phase is carried when it is given"
+
+LINES_BEFORE=$(mk lines "$REC")
+run ledger --run pled --observation "a dry observation" --dry-run
+need_rc 0
+need_out "ledger --observation: dry run"
+need_out "plain lane run (no run-open)"
+need_eq "$(mk lines "$REC")" "$LINES_BEFORE" "record lines (dry run appends nothing)"
+need_eq "$(mk count "$REC" observation)" "2" "observation events after the dry run"
+verdict "ledger --observation --dry-run: the event is printed and nothing is appended"
+
+LINES_BEFORE=$(mk lines "$REC")
+run ledger --run pled --phase 2 --what "a finding with nowhere to go" --evidence "e" --routing "r"
+need_rc 2
+need_out "no run-open event"
+need_out "--observation"
+need_lines
+need_eq "$(mk lines "$REC")" "$LINES_BEFORE" "record lines (nothing appended)"
+verdict "ledger (the row form) on a plain record: refused as before, exit 2, and the message names --observation as the form that works there"
+
+run ledger --run pled --phase 2 --what "no evidence given"
+need_rc 2
+need_out "--evidence"
+need_out "--observation"
+verdict "ledger: a partial row form names the flags it lacks and the observation form (exit 2)"
+
+# the clean control: the same --observation on a record that HAS a run-open appends the
+# observation and NO ledger row (the head's aside that is not a finding)
+fixture rledobs 200
+ROWS_BEFORE=$(mk rows "$HO" "Findings ledger")
+run ledger --run rledobs --observation "an aside that is not a finding"
+need_rc 0
+need_out "run-open present"
+need_eq "$(mk count "$REC" observation)" "1" "observation events"
+need_eq "$(mk rows "$HO" "Findings ledger")" "$ROWS_BEFORE" "ledger rows (unchanged)"
+verdict "ledger --observation on a run-open record: the observation alone, the findings ledger untouched (the control for the plain leg)"
+
+
 # ------------------------------------------------------------------------------ gate -------
 fixture rgate 200
 SID=sid-rgate
@@ -967,6 +1149,57 @@ need_rc 0
 need_out "first miss"
 need_absent "second consecutive"
 verdict "gate: the unmetered count is scoped to the last session event (a run-resume resets it)"
+
+# ------------------------------------------------------------------ gate: the envelope -------
+# Register entry 2026-09-07: an envelope the pre-flight states is measured at every gate, or its
+# stop condition cannot fire. Fixture envelope $100; the billed line's session total is $19.62.
+fixture renv 100
+SID=sid-renv
+mk transcript "$SID" 100000 >/dev/null
+run gate --run renv --to "item one" --meter-line "$METER"
+need_rc 0
+need_out 'envelope: $19.62 of $100.00, remainder $80.38'
+need_eq "$(mk field "$REC" gate decision)" "allow" "decision"
+verdict "gate: the line carries spent, envelope and remainder (100.00 - 19.62 = 80.38) and allows"
+
+# Two earlier heads spent $50.00 and $40.00 (head-exit spent_usd); with this session's $19.62
+# the remainder is 100 - 90 - 19.62 = -9.62, at or below zero: the gate refuses with exit 5,
+# unarmed, and the record gains the gate event and the stop-condition, nothing else.
+mk append "$REC" '{"event":"head-exit","band":80,"spent_usd":50.0}' >/dev/null
+mk append "$REC" '{"event":"head-exit","band":80,"spent_usd":40.0}' >/dev/null
+RUNENV="PATH=$WORK/psnone:$PATH"
+run run-resume --run renv --session "$SID" --head "successor" --detail "after two exits"
+need_rc 0
+LINES_BEFORE=$(mk lines "$REC")
+run gate --run renv --to "item two" --meter-line "$METER"
+need_rc 5
+need_out 'envelope: $109.62 of $100.00, remainder -$9.62'
+need_out "REFUSED (stop-condition envelope"
+need_eq "$(mk field "$REC" stop-condition which)" "envelope" "stop-condition which"
+need_eq "$(mk field "$REC" stop-condition lane)" "head" "stop-condition lane"
+need_eq "$(mk field "$REC" gate decision)" "refuse" "decision"
+need_eq "$(mk lines "$REC")" "$((LINES_BEFORE + 2))" "record lines (the gate and the stop-condition)"
+verdict "gate: a spent envelope (remainder at or below zero) records stop-condition envelope, lane head, and exits 5"
+
+fixture rnoenv none
+SID=sid-rnoenv
+mk transcript "$SID" 100000 >/dev/null
+run gate --run rnoenv --to "item one" --meter-line "$METER"
+need_rc 0
+need_out "envelope: none"
+need_absent "REFUSED"
+need_eq "$(mk lines "$REC")" "2" "record lines (run-open and the gate)"
+verdict "gate: a record whose run-open carries no envelope_usd prints envelope: none and allows"
+
+fixture runm 100
+SID=sid-runm
+mk transcript "$SID" 100000 >/dev/null
+run gate --run runm --to "item one" --meter-line "failed: the fixture meter gave nothing"
+need_rc 0
+need_out "envelope: unmeasured (the meter gave no session total)"
+need_absent "REFUSED"
+need_eq "$(mk lines "$REC")" "2" "record lines (run-open and the gate)"
+verdict "gate: an envelope the meter cannot measure prints unmeasured and allows, never a refusal"
 
 # --------------------------------------------------------------------------- handoff -------
 fixture rho 200
@@ -1220,6 +1453,58 @@ need_eq "$(mk bullet "$HO" "Spend against the envelope")" \
         "$METER · envelope \$200.0" "spend bullet"
 need_file "$STORE/spawn-records/rclose-heartbeat.stop"
 verdict "close: run-close carries lanes, decisions, the tally, per-item context, the trace; the heartbeat stop marker is written"
+
+# ---------------------------------------------------------- close on the plain-lane-run shape
+plain_fixture pclose
+COMMITS_BEFORE=$(git -C "$VAULT" rev-list --count HEAD)
+run close --run pclose --items "not applicable"
+need_rc 0
+need_out "plain lane run (no run-open)"
+need_out "lanes 3 (completed 1 · error 1 · open 1)"
+need_out "spend \$3.75"
+need_out "no hand-off row, no commit, no push"
+need_eq "$(mk field "$REC" run-close shape)" "plain-lane-run" "the shape field"
+need_eq "$(mk field "$REC" run-close lanes)" "3" "lanes"
+need_eq "$(mk field "$REC" run-close lanes_by_exit)" '{"completed": 1, "error": 1, "open": 1}' "lanes by exit class"
+need_eq "$(mk field "$REC" run-close spend_usd)" "3.75" "spend summed from the lane-closed costs"
+need_eq "$(mk field "$REC" run-close spend_src)" "sum of 2 lane-closed total_cost_usd" "the spend's source"
+need_eq "$(mk field "$REC" run-close trace)" "<no key trace>" "no trace field (there is no hand-off)"
+need_eq "$(mk field "$REC" run-close commit)" "<no key commit>" "no commit field"
+need_eq "$(git -C "$VAULT" rev-list --count HEAD)" "$COMMITS_BEFORE" "commit count"
+need_nofile "$STORE/spawn-records/pclose-heartbeat.stop"
+need_nofile "$STORE/spawn-records/pclose-supervisor.stop"
+verdict "close on a plain record: run-close carries shape plain-lane-run, the lanes by exit class and the lane-summed spend; no hand-off row, no commit, no meter, no markers (exit 0)"
+
+# the clean control: a run-open record still closes as today, and its run-close carries NO shape
+need_eq "$(mk field "$STORE/spawn-records/rclose.jsonl" run-close shape)" "<no key shape>" "the hands-off close carries no shape field"
+need_eq "$(mk field "$STORE/spawn-records/rclose.jsonl" run-close lanes)" "2" "the hands-off close's lanes"
+verdict "close: the hands-off close of the rclose leg is unchanged and carries no shape field, so the two shapes are told apart by the record"
+
+plain_fixture pclose2
+LINES_BEFORE=$(mk lines "$REC")
+COMMITS_BEFORE=$(git -C "$VAULT" rev-list --count HEAD)
+run close --run pclose2 --commit "fixture: a commit a plain run may not make"
+need_rc 2
+need_out "never commits and never pushes"
+need_lines
+need_eq "$(mk lines "$REC")" "$LINES_BEFORE" "record lines (nothing written)"
+need_eq "$(mk count "$REC" run-close)" "0" "run-close events"
+need_eq "$(git -C "$VAULT" rev-list --count HEAD)" "$COMMITS_BEFORE" "commit count"
+run close --run pclose2 --push
+need_rc 2
+need_out "never commits and never pushes"
+need_eq "$(mk lines "$REC")" "$LINES_BEFORE" "record lines after --push"
+need_eq "$(mk count "$REC" run-close)" "0" "run-close events after --push"
+verdict "close --commit and --push on a plain record: refused with the reason (exit 2), nothing written and nothing committed"
+
+plain_fixture pclose3
+LINES_BEFORE=$(mk lines "$REC")
+run close --run pclose3 --dry-run
+need_rc 0
+need_out "close: dry run · plain lane run"
+need_out '"shape": "plain-lane-run"'
+need_eq "$(mk lines "$REC")" "$LINES_BEFORE" "record lines (dry run writes nothing)"
+verdict "close --dry-run on a plain record: the run-close it would write is printed and the record is untouched"
 
 # ------------------------------------------------------------- grants file and pointer ----
 mkdir -p "$WORK/real-grant"
@@ -1629,6 +1914,7 @@ verdict "handoff --inflight-from-record --final: the derived pack passes the sam
 # above the first edge, the supervisor writes the head-exit the head owed (pack false) and starts
 # a successor — and that pack, fresh when the run began, is older than the exit just written.
 fixture rageD 200
+arm_resume rageD
 mk append "$REC" '{"event":"head-exit","ts":"2020-01-02T03:04:05+0100","band":80,"context":"c","spent_usd":5,"pack":false}' >/dev/null
 run handoff --run rageD --inflight "- Next: fresh when the first head started
 - Needs: wiki/l.md:7
@@ -1779,8 +2065,52 @@ need_lines
 need_eq "$(mk field "$REC" successor-aborted reason)" "budget" "successor-aborted budget"
 verdict "successor: the remainder is the envelope minus every head-exit's spent_usd (10 of 100); spent → successor-aborted budget"
 
+# ------------------------------------------------- the limit gate (D42): the grants file's key ---
+HO="$WORK/handoffs/onl-handoff.md"; mk handoff "$HO" >/dev/null
+REC="$STORE/spawn-records/ronl.jsonl"; rm -f "$REC"
+GF="$STORE/spawn-records/ronl-grants.json"; rm -f "$GF"
+run run-open --run ronl --session sid-onl --head "fixture head" --regime single --regime-src owner \
+    --handoff "$HO" --detail "gate" --pid 1
+need_rc 0
+need_eq "$(gval "$GF")" "stop" "run-open default"
+need_eq "$(mk field "$REC" run-open on_limit)" "stop" "the run-open event"
+need_eq "$(mk field "$REC" run-open on_limit_src)" "default (no grants file)" "the source"
+need_out "on_limit stop (default (no grants file))"
+run grants --run ronl --on-limit resume
+need_rc 0
+need_eq "$(gval "$GF")" "resume" "grants --on-limit resume"
+need_out "on_limit resume (--on-limit)"
+run grants --run ronl --grant "$WORK/handoffs"
+need_rc 0
+need_eq "$(gval "$GF")" "resume" "a rebuild with --grant carries resume forward"
+need_eq "$(mk field "$REC" grants on_limit_src)" "grants" "carried from the file"
+run run-resume --run ronl --session sid-onl2 --head "fixture head" --detail "flag-less" --pid 1
+need_rc 0
+need_eq "$(gval "$GF")" "resume" "a flag-less run-resume keeps the file"
+need_eq "$(mk field "$REC" run-resume on_limit)" "resume" "the run-resume event"
+run run-resume --run ronl --session sid-onl3 --head "fixture head" --detail "rebuild" --pid 1 --grant "$WORK/handoffs"
+need_rc 0
+need_eq "$(gval "$GF")" "resume" "a run-resume rebuild with --grant carries resume forward"
+run run-resume --run ronl --session sid-onl4 --head "fixture head" --detail "set stop" --pid 1 --on-limit stop
+need_rc 0
+need_eq "$(gval "$GF")" "stop" "run-resume --on-limit stop rewrites"
+need_eq "$(mk field "$REC" run-resume on_limit_src)" "--on-limit" "the source"
+REC2="$STORE/spawn-records/ronl2.jsonl"; rm -f "$REC2"
+run run-open --run ronl2 --session sid-onl5 --head "fixture head" --regime single --regime-src owner \
+    --handoff "$HO" --detail "gate" --pid 1 --on-limit resume
+need_rc 0
+need_eq "$(gval "$STORE/spawn-records/ronl2-grants.json")" "resume" "run-open --on-limit resume"
+verdict "limit gate (D42): run-open writes on_limit stop by default and resume under the flag; grants --on-limit sets it; every rebuild (grants --grant, run-resume --grant) and a flag-less run-resume carry it forward; --on-limit stop rewrites"
+
+run grants --run ronl --grants-file "$WORK/elsewhere-grants.json" --on-limit resume
+need_rc 2
+need_out "needs the default grants path"
+need_nofile "$WORK/elsewhere-grants.json"
+verdict "limit gate (D42): --on-limit resume with --grants-file is refused — the supervisor and the status hook read the default path only (C2 H2)"
+
 # --------------------------------------------------------- the supervisor: limit, resume ---
 fixture rlim 200
+arm_resume rlim
 mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
 OUT="$WORK/starter/rlim-head-1.out"
 RUNENV="STUB_MODE=limit STUB_N=1 STUB_TOKENS=50000 AIMYTH_CONTEXT_WINDOW=200000"
@@ -1793,6 +2123,8 @@ case $(mk field "$REC" stop-condition action) in
   *) why="$why; --reset-at did not win over the stop text: $(mk field "$REC" stop-condition action)" ;;
 esac
 need_eq "$(mk field "$REC" stop-condition note)" "You've hit your session limit · resets 8:50am (Europe/London)" "the stop text"
+need_eq "$(mk field "$REC" stop-condition on_limit_src)" "grants" "the gate read from the grants file"
+case $(mk field "$REC" stop-condition watch) in "transcript "*) : ;; *) why="$why; the stop-condition names no watched transcript: $(mk field "$REC" stop-condition watch)" ;; esac
 need_eq "$(mk field "$REC" head-resumed context)" "50000" "head-resumed context"
 need_eq "$(mk field "$REC" head-resumed resume_n)" "1" "resume_n"
 need_eq "$(mk field "$REC" head-resumed reset_source)" "--reset-at +2s" "reset_source"
@@ -1810,6 +2142,7 @@ case $(mk field "$REC" observation note) in handed-over*) : ;; *) why="$why; not
 verdict "supervisor: a limit stop waits (--reset-at wins over the text), resumes under the edge with the note on stdin, then the hand-over ends it"
 
 fixture rlim2 200
+arm_resume rlim2
 mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
 RUNENV="STUB_MODE=limit STUB_N=1 STUB_TOKENS=150000 AIMYTH_CONTEXT_WINDOW=200000"
 starter --run rlim2 --handoff "$HO" --budget 3.50 --out "$WORK/starter/rlim2-head-1.out" --wait-s 5 \
@@ -1826,6 +2159,303 @@ need_eq "$(cat "$WORK/chain.txt")" "limit limit 19.62" "head-exit band limit wit
 need_eq "$(mk count "$REC" head-successor)" "3" "the successor path ran"
 case $(sed -n 2p "$WORK/stub-rlim2.args") in *"--session-id"*) : ;; *) why="$why; the successor is not a fresh session" ;; esac
 verdict "supervisor: a limit stop at or above the first edge writes head-exit band limit and starts the successor"
+
+# ------------------------------------------- the limit gate (D42, D43): stop and stand down ---
+# t2: the default. No grants file at all → on_limit stop, source "default (no grants file)": the
+# supervisor writes the stop-condition and stands down at once — no wait, no resume, exit 0.
+fixture rstop 200
+mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
+RUNENV="STUB_MODE=limit STUB_N=1 STUB_TOKENS=50000 AIMYTH_CONTEXT_WINDOW=200000"
+starter --run rstop --handoff "$HO" --budget 3.50 --out "$WORK/starter/rstop-head-1.out" --wait-s 5 \
+        --harness-bin "$WORK/bin/stubhead" --meter-line "$METER" --reset-at +1s --tick-s 1
+need_rc 0
+need_out "stood down (limit-stop)"
+need_eq "$(mk field "$REC" stop-condition which)" "limit" "stop-condition"
+need_eq "$(mk field "$REC" stop-condition action)" "stand-down: on_limit stop" "the action"
+need_eq "$(mk field "$REC" stop-condition on_limit_src)" "default (no grants file)" "the source"
+need_eq "$(mk field "$REC" supervisor-stood-down reason)" "limit-stop" "stood-down reason"
+need_eq "$(mk field "$REC" supervisor-stood-down on_limit)" "stop" "on_limit"
+need_eq "$(mk count "$REC" head-resumed)" "0" "no resume"
+need_eq "$(mk count "$REC" successor-aborted)" "0" "not an abort"
+need_eq "$(cat "$WORK/stub-rstop.count")" "1" "one start, no second"
+verdict "limit gate (D42): with no grants file the default on_limit stop stands the supervisor down at once — stop-condition, supervisor-stood-down limit-stop, exit 0, no wait, no resume"
+
+# resume-head (D42's recovery, C2 M4): after the stand-down above, the owner's command resumes the
+# head in place — armed (AIMYTH_HANDSOFF_RUN), with the head-resumed event, supervised to its hand-over.
+RSID=$(mk field "$REC" head-successor session_id)
+run resume-head --run rstop --harness-bin "$WORK/bin/stubhead" --meter-line "$METER" --dry-run
+need_rc 0
+need_out "would detach"
+need_out "_resume-head --run rstop --session $RSID"
+RUNENV="STUB_MODE=limit STUB_N=1 STUB_TOKENS=50000 AIMYTH_CONTEXT_WINDOW=200000"
+run _resume-head --run rstop --session "$RSID" --out "$WORK/starter/rstop-head-1.out" \
+    --harness-bin "$WORK/bin/stubhead" --meter-line "$METER" --wait-s 5 --tick-s 1
+need_rc 0
+need_eq "$(mk count "$REC" head-resumed)" "1" "head-resumed"
+need_eq "$(mk field "$REC" head-resumed reset_source)" "resume-head (by hand, after the reset)" "the source"
+case $(sed -n 2p "$WORK/stub-rstop.args") in *"--resume $RSID"*) : ;; *) why="$why; the second invocation is not a --resume of the session: $(sed -n 2p "$WORK/stub-rstop.args")" ;; esac
+need_eq "$(cat "$WORK/stub-rstop.env")" "rstop" "AIMYTH_HANDSOFF_RUN seen by the resumed head (armed)"
+case $(mk field "$REC" observation note) in handed-over*) : ;; *) why="$why; not ended handed-over: $(mk field "$REC" observation note)" ;; esac
+verdict "resume-head (D42, C2 M4): after a stand-down the owner's command resumes the last head in place — armed, head-resumed recorded, supervised to the hand-over"
+
+# t7: a grants file written before the gate existed (no on_limit key) reads stop, source "default (key absent)".
+fixture rstop2 200
+mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
+printf '{"run":"rstop2","grants":[],"writes":[]}\n' > "$STORE/spawn-records/rstop2-grants.json"
+RUNENV="STUB_MODE=limit STUB_N=1 STUB_TOKENS=50000 AIMYTH_CONTEXT_WINDOW=200000"
+starter --run rstop2 --handoff "$HO" --budget 3.50 --out "$WORK/starter/rstop2-head-1.out" --wait-s 5 \
+        --harness-bin "$WORK/bin/stubhead" --meter-line "$METER" --reset-at +1s --tick-s 1
+need_rc 0
+need_eq "$(mk field "$REC" stop-condition on_limit_src)" "default (key absent)" "the source"
+need_eq "$(mk field "$REC" supervisor-stood-down reason)" "limit-stop" "stood-down"
+need_eq "$(mk count "$REC" head-resumed)" "0" "no resume"
+verdict "limit gate (D42): a grants file without the key reads stop, source default (key absent)"
+
+# t3: under resume, the transcript changes during the wait (the owner continued the session by
+# hand) → supervisor-stood-down resumed-by-hand, no resume call. The starter runs in the
+# background with a 6 s reset; the leg appends one record to the head's transcript once the
+# stop-condition is written. The rlim leg above is the control: unchanged → head-resumed.
+fixture rhand 200
+arm_resume rhand
+mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
+(
+  RCF=0
+  env STUB_MODE=limit STUB_N=1 STUB_TOKENS=50000 AIMYTH_CONTEXT_WINDOW=200000 "$PY" -B "$H" _starter \
+      --run rhand --handoff "$HO" --budget 3.50 --out "$WORK/starter/rhand-head-1.out" --wait-s 5 \
+      --harness-bin "$WORK/bin/stubhead" --meter-line "$METER" --reset-at +6s --tick-s 1 \
+      >"$WORK/starter-out" 2>&1 || RCF=$?
+  printf '%s\n' "$RCF" > "$WORK/starter-rc"
+) &
+STARTER=$!
+wait_field "$REC" stop-condition which limit 20
+HSID=$(mk field "$REC" head-successor session_id)
+HTR=$(find "$PROJECTS" -name "$HSID.jsonl" | head -1)
+[ -n "$HTR" ] || why="$why; no transcript for the head session $HSID under $PROJECTS"
+printf '{"type":"user","message":{"role":"user","content":"continue"}}\n' >> "$HTR"
+wait "$STARTER"
+RC=$(cat "$WORK/starter-rc")
+cp "$WORK/starter-out" "$WORK/both"
+need_rc 0
+need_out "stood down (resumed-by-hand)"
+case $(mk field "$REC" stop-condition watch) in "transcript "*) : ;; *) why="$why; the stop-condition names no watched transcript: $(mk field "$REC" stop-condition watch)" ;; esac
+need_eq "$(mk field "$REC" supervisor-stood-down reason)" "resumed-by-hand" "stood-down reason"
+need_eq "$(mk count "$REC" head-resumed)" "0" "no resume"
+need_eq "$(mk count "$REC" successor-aborted)" "0" "not an abort"
+need_eq "$(cat "$WORK/stub-rhand.count")" "1" "one start, no second"
+verdict "limit gate (D43): under resume, a transcript that changes during the wait stands the supervisor down (resumed-by-hand) with no resume call — the rlim leg is its control (unchanged transcript → head-resumed)"
+
+# t4: supervise --stop needs no harness ancestor (it precedes pid resolution), writes the marker,
+# and the sleeping supervisor stands down (stopped) at its next tick.
+fixture rmark 200
+arm_resume rmark
+mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
+(
+  RCF=0
+  env STUB_MODE=limit STUB_N=1 STUB_TOKENS=50000 AIMYTH_CONTEXT_WINDOW=200000 "$PY" -B "$H" _starter \
+      --run rmark --handoff "$HO" --budget 3.50 --out "$WORK/starter/rmark-head-1.out" --wait-s 5 \
+      --harness-bin "$WORK/bin/stubhead" --meter-line "$METER" --reset-at +6s --tick-s 1 \
+      >"$WORK/starter-out" 2>&1 || RCF=$?
+  printf '%s\n' "$RCF" > "$WORK/starter-rc"
+) &
+STARTER=$!
+wait_field "$REC" stop-condition which limit 20
+RUNENV="PATH=$WORK/psnone:$PATH"
+run supervise --run rmark --stop
+need_rc 0
+need_out "stop marker written"
+need_file "$STORE/spawn-records/rmark-supervisor.stop"
+need_eq "$(mk field "$REC" supervise mode)" "stop-requested" "the supervise event"
+wait "$STARTER"
+RC=$(cat "$WORK/starter-rc")
+cp "$WORK/starter-out" "$WORK/both"
+need_rc 0
+need_eq "$(mk field "$REC" supervisor-stood-down reason)" "stopped" "stood-down reason"
+need_eq "$(mk count "$REC" head-resumed)" "0" "no resume"
+verdict "limit gate (D43): supervise --stop under the no-ancestor stub writes the marker, and the sleeping supervisor stands down (stopped) at its next tick"
+
+# a fresh arming removes a stale marker: the rmark marker is still on disk; a new starter for the
+# same run must not stand down on it.
+fixture rmark2 200
+arm_resume rmark2
+mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
+printf 'stale\n' > "$STORE/spawn-records/rmark2-supervisor.stop"
+RUNENV="STUB_MODE=limit STUB_N=1 STUB_TOKENS=50000 AIMYTH_CONTEXT_WINDOW=200000"
+starter --run rmark2 --handoff "$HO" --budget 3.50 --out "$WORK/starter/rmark2-head-1.out" --wait-s 5 \
+        --harness-bin "$WORK/bin/stubhead" --meter-line "$METER" --reset-at +1s --tick-s 1
+need_rc 0
+need_out "stale stop marker removed"
+need_eq "$(mk count "$REC" supervisor-stood-down)" "0" "no stand-down on a stale marker"
+need_eq "$(mk count "$REC" head-resumed)" "1" "the resume ran"
+verdict "limit gate (D43): a fresh arming removes a stale stop marker and the wait proceeds to the resume"
+
+# t4c: a stop marker present AT THE HEAD'S EXIT stands the supervisor down before any successor
+# decision, on the successor fork of a head that did not stop on a limit — the shape of the
+# 2026-09-07 register entry, where a marker written at 16:22 did not stop the successor started
+# after a SIGTERM at 16:24. The supervisor is attached to a pid that is already gone, so the
+# classification runs at once off the head's own .out; t4d below is the same fixture with no
+# marker, and it starts the successor.
+fixture rexit 200
+mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
+printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"terminated by a signal"}' > "$WORK/rexit.out"
+printf 'stopped by the owner\n' > "$STORE/spawn-records/rexit-supervisor.stop"
+RC=0
+env "$PY" -B "$H" _supervise --run rexit --pid 999999 --session sid-rexit \
+    --out "$WORK/rexit.out" --harness-bin "$WORK/bin/stubhead" --handoff "$HO" \
+    --meter-line "$METER" --tick-s 1 --wait-s 2 >"$WORK/out" 2>"$WORK/err" || RC=$?
+cat "$WORK/out" "$WORK/err" >"$WORK/both"
+need_rc 0
+need_out "stood down (stopped)"
+need_out "a stop marker was on disk at the head's exit"
+need_eq "$(mk field "$REC" supervisor-stood-down reason)" "stopped" "stood-down reason"
+need_eq "$(mk count "$REC" head-successor)" "0" "no successor start"
+need_eq "$(mk count "$REC" successor-aborted)" "0" "not an abort"
+[ -f "$WORK/stub-rexit.count" ] && why="$why; the stub head was started"
+need_file "$STORE/spawn-records/rexit-supervisor.stop"
+verdict "stop marker (2026-09-07): a marker on disk at a head's exit stands the supervisor down (stopped) before the successor decision, on a non-limit exit class; the marker is left for the record"
+
+# t4c2: the other fork — a head that left NO head-exit, classified from its own .out (the shape a
+# signalled head takes). The marker stands the supervisor down there too.
+fixture rexit4 200
+printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"terminated by a signal"}' > "$WORK/rexit4.out"
+printf 'stopped by the owner\n' > "$STORE/spawn-records/rexit4-supervisor.stop"
+RC=0
+env "$PY" -B "$H" _supervise --run rexit4 --pid 999999 --session sid-rexit4 \
+    --out "$WORK/rexit4.out" --harness-bin "$WORK/bin/stubhead" --handoff "$HO" \
+    --meter-line "$METER" --tick-s 1 --wait-s 2 >"$WORK/out" 2>"$WORK/err" || RC=$?
+cat "$WORK/out" "$WORK/err" >"$WORK/both"
+need_rc 0
+need_out "stood down (stopped)"
+need_eq "$(mk field "$REC" supervisor-stood-down reason)" "stopped" "stood-down reason"
+need_eq "$(mk count "$REC" head-exit)" "0" "no head-exit written by the supervisor"
+need_eq "$(mk count "$REC" head-successor)" "0" "no successor start"
+[ -f "$WORK/stub-rexit4.count" ] && why="$why; the stub head was started"
+verdict "stop marker: on the classifier's own fork too (a head that left no head-exit, the signalled shape) the marker stands the supervisor down before the successor decision"
+
+# t4d: the control — the same fixture and the same exit, with no marker: the successor starts.
+fixture rexit2 200
+printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"terminated by a signal"}' > "$WORK/rexit2.out"
+need_nofile "$STORE/spawn-records/rexit2-supervisor.stop"
+RC=0
+env STUB_MODE=complete STUB_N=0 "$PY" -B "$H" _supervise --run rexit2 --pid 999999 \
+    --session sid-rexit2 --out "$WORK/rexit2.out" --harness-bin "$WORK/bin/stubhead" \
+    --handoff "$HO" --meter-line "$METER" --tick-s 1 --wait-s 2 >"$WORK/out" 2>"$WORK/err" || RC=$?
+cat "$WORK/out" "$WORK/err" >"$WORK/both"
+need_eq "$(mk count "$REC" supervisor-stood-down)" "0" "no stand-down without a marker"
+need_eq "$(cat "$WORK/stub-rexit2.count")" "1" "the stub head was started once (the successor)"
+need_out "successor path"
+verdict "stop marker: the control — the same exit with no marker takes the successor path and starts one head"
+
+# t4e: arming a supervisor does not clear the marker (the three clearing sites are resume-head, a
+# successor called by a head, and close). The marker planted here survives the attach, so the
+# supervisor stands down at the head's exit rather than succeeding it.
+fixture rexit3 200
+mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
+printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"terminated by a signal"}' > "$WORK/rexit3.out"
+printf 'stopped by the owner\n' > "$STORE/spawn-records/rexit3-supervisor.stop"
+RC=0
+env "$PY" -B "$H" _supervise --run rexit3 --pid 999999 --session sid-rexit3 \
+    --out "$WORK/rexit3.out" --harness-bin "$WORK/bin/stubhead" --handoff "$HO" \
+    --meter-line "$METER" --tick-s 1 --wait-s 2 >"$WORK/out" 2>"$WORK/err" || RC=$?
+cat "$WORK/out" "$WORK/err" >"$WORK/both"
+need_absent "stale stop marker removed"
+need_file "$STORE/spawn-records/rexit3-supervisor.stop"
+need_eq "$(mk field "$REC" supervisor-stood-down reason)" "stopped" "stood-down reason"
+verdict "stop marker: attaching a supervisor never clears the marker (no 'stale stop marker removed' line), so a stopped run stays stopped across a re-arming"
+
+# t8: the ≥60 % fork under resume with the transcript changed during the wait → stood down, no
+# successor start (the last-act check before successor_path is the same check the tick runs).
+fixture rhand2 200
+arm_resume rhand2
+mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
+(
+  RCF=0
+  env STUB_MODE=limit STUB_N=1 STUB_TOKENS=150000 AIMYTH_CONTEXT_WINDOW=200000 "$PY" -B "$H" _starter \
+      --run rhand2 --handoff "$HO" --budget 3.50 --out "$WORK/starter/rhand2-head-1.out" --wait-s 5 \
+      --harness-bin "$WORK/bin/stubhead" --meter-line "$METER" --reset-at +6s --tick-s 1 \
+      >"$WORK/starter-out" 2>&1 || RCF=$?
+  printf '%s\n' "$RCF" > "$WORK/starter-rc"
+) &
+STARTER=$!
+wait_field "$REC" stop-condition which limit 20
+HSID=$(mk field "$REC" head-successor session_id)
+HTR=$(find "$PROJECTS" -name "$HSID.jsonl" | head -1)
+[ -n "$HTR" ] || why="$why; no transcript for the head session $HSID under $PROJECTS"
+printf '{"type":"user","message":{"role":"user","content":"continue"}}\n' >> "$HTR"
+wait "$STARTER"
+RC=$(cat "$WORK/starter-rc")
+cp "$WORK/starter-out" "$WORK/both"
+need_rc 0
+need_eq "$(mk field "$REC" supervisor-stood-down reason)" "resumed-by-hand" "stood-down reason"
+need_eq "$(mk count "$REC" head-successor)" "1" "no successor start after the stand-down (the starter's own only)"
+need_eq "$(cat "$WORK/stub-rhand2.count")" "1" "one start, no second"
+verdict "limit gate (D43): at 75 % (the successor fork) a transcript that changes during the wait stands the supervisor down before any successor start"
+
+# t6: no transcript file (no STUB_TOKENS) → the wait is unwatched, recorded as such, and proceeds.
+fixture runw 200
+arm_resume runw
+mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
+RUNENV="STUB_MODE=limit STUB_N=1 AIMYTH_CONTEXT_WINDOW=200000"
+starter --run runw --handoff "$HO" --budget 3.50 --out "$WORK/starter/runw-head-1.out" --wait-s 5 \
+        --harness-bin "$WORK/bin/stubhead" --meter-line "$METER" --reset-at +1s --tick-s 1
+need_rc 0
+need_eq "$(mk field "$REC" stop-condition watch)" "unwatched (no transcript file)" "the watch label"
+need_eq "$(mk count "$REC" supervisor-stood-down)" "0" "no stand-down"
+verdict "limit gate (D43): with no transcript file the wait is recorded unwatched and proceeds"
+
+# t3d / t8b (C2 M3): the LAST-ACT check. The change lands after the wait's last tick and before
+# the start: --reset-at +8s with --tick-s 5 checks at 0 s and 5 s, then sleeps to 8 s; the leg
+# appends at ≈6.5 s. A per-tick-only implementation resumes; the last-act check stands down.
+# Timing-dependent by construction (margins ≈1.5 s each side on this machine).
+fixture rlast 200
+arm_resume rlast
+mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
+(
+  RCF=0
+  env STUB_MODE=limit STUB_N=1 STUB_TOKENS=50000 AIMYTH_CONTEXT_WINDOW=200000 "$PY" -B "$H" _starter \
+      --run rlast --handoff "$HO" --budget 3.50 --out "$WORK/starter/rlast-head-1.out" --wait-s 5 \
+      --harness-bin "$WORK/bin/stubhead" --meter-line "$METER" --reset-at +8s --tick-s 5 \
+      >"$WORK/starter-out" 2>&1 || RCF=$?
+  printf '%s\n' "$RCF" > "$WORK/starter-rc"
+) &
+STARTER=$!
+wait_field "$REC" stop-condition which limit 20
+sleep 6
+HSID=$(mk field "$REC" head-successor session_id)
+HTR=$(find "$PROJECTS" -name "$HSID.jsonl" | head -1)
+printf '{"type":"user","message":{"role":"user","content":"continue"}}\n' >> "$HTR"
+wait "$STARTER"
+RC=$(cat "$WORK/starter-rc")
+cp "$WORK/starter-out" "$WORK/both"
+need_rc 0
+need_eq "$(mk field "$REC" supervisor-stood-down reason)" "resumed-by-hand" "stood-down reason"
+need_eq "$(mk count "$REC" head-resumed)" "0" "no resume"
+verdict "limit gate (D43, C2 M3): the resume fork's last-act check catches a change after the wait's last tick (timing leg)"
+
+fixture rlast2 200
+arm_resume rlast2
+mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
+(
+  RCF=0
+  env STUB_MODE=limit STUB_N=1 STUB_TOKENS=150000 AIMYTH_CONTEXT_WINDOW=200000 "$PY" -B "$H" _starter \
+      --run rlast2 --handoff "$HO" --budget 3.50 --out "$WORK/starter/rlast2-head-1.out" --wait-s 5 \
+      --harness-bin "$WORK/bin/stubhead" --meter-line "$METER" --reset-at +8s --tick-s 5 \
+      >"$WORK/starter-out" 2>&1 || RCF=$?
+  printf '%s\n' "$RCF" > "$WORK/starter-rc"
+) &
+STARTER=$!
+wait_field "$REC" stop-condition which limit 20
+sleep 6
+HSID=$(mk field "$REC" head-successor session_id)
+HTR=$(find "$PROJECTS" -name "$HSID.jsonl" | head -1)
+printf '{"type":"user","message":{"role":"user","content":"continue"}}\n' >> "$HTR"
+wait "$STARTER"
+RC=$(cat "$WORK/starter-rc")
+cp "$WORK/starter-out" "$WORK/both"
+need_rc 0
+need_eq "$(mk field "$REC" supervisor-stood-down reason)" "resumed-by-hand" "stood-down reason"
+need_eq "$(mk count "$REC" head-successor)" "1" "no successor start (the starter's own only)"
+need_eq "$(cat "$WORK/stub-rlast2.count")" "1" "one start, no second"
+verdict "limit gate (D43, C2 H1): the successor fork's last-act check, inside start_head after the meter, catches a change after the wait's last tick (timing leg)"
 
 fixture rbud 200
 mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
@@ -1861,6 +2491,7 @@ case $(mk field "$REC" observation note) in handed-over*) : ;; *) why="$why; the
 verdict "supervisor (N4): a head-exit with no head-successor after the wait gets the successor path; with one present, handed-over ends it"
 
 fixture rcap 200
+arm_resume rcap
 mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
 RUNENV="STUB_MODE=limit STUB_N=3 STUB_TOKENS=50000 AIMYTH_CONTEXT_WINDOW=200000"
 starter --run rcap --handoff "$HO" --budget 3.50 --out "$WORK/starter/rcap-head-1.out" --wait-s 5 \
@@ -1925,9 +2556,12 @@ need_eq "$(cat "$WORK/prev2.txt")" "error" "positive control: a metered error he
 verdict "supervisor: a head-exit whose session left no transcript is skipped by the repeat-stop guard, while a metered error exit still counts ($SHAPE_SRC)"
 
 WTS="$WORK/rseed-waste.md"
-run waste-table --run rseed --out "$WTS"
+run waste-table --run rseed --out "$WTS" --no-meter
 need_rc 0
-need_eq "$(grep -c '2 head session(s)' "$WTS")" "1" "the head count leaves the session with no transcript out"
+# One id, not two spans: the head-successor and the run-resume that follows it name the SAME
+# session, and counting spans read four heads for two ids (register entry 2026-09-06, fixed
+# 2026-09-07). The distinct-id count is asserted in its own leg further down with a control.
+need_eq "$(grep -c '1 head session(s)' "$WTS")" "1" "the head count leaves the session with no transcript out"
 need_eq "$(grep -c '^| orientation cost · head sid-rseedb' "$WTS")" "1" "one row per session id"
 need_eq "$(grep -c 'orientation cost · head sid-seeded-head' "$WTS")" "0" "the session that left no transcript is not a head"
 need_eq "$(grep -c '^| orientation cost' "$WTS")" "1" "orientation rows in all"
@@ -1945,6 +2579,7 @@ need_eq "$(mk count "$REC" head-successor)" "3" "an error class start, then the 
 verdict "supervisor: a .out with no JSON result line classifies as error (one successor), never as a limit"
 
 fixture rdup 200
+arm_resume rdup
 mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
 (
   RCF=0
@@ -1968,6 +2603,7 @@ verdict "supervisor: a head-resumed written by another supervisor during the wai
 # The planted input for both legs below is STUB_MODE=nolimit: a limit result whose text names
 # no reset time. Without --probe the supervisor sends nothing and hands off; with it, it probes.
 fixture rnoprobe 200
+arm_resume rnoprobe
 mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
 rm -f "$WORK/stub-probe.count"
 RUNENV="STUB_MODE=nolimit STUB_N=1 STUB_TOKENS=50000 AIMYTH_CONTEXT_WINDOW=200000"
@@ -1984,6 +2620,7 @@ need_eq "$PROBES" "0" "probe calls without --probe"
 verdict "supervisor: without --probe an unparsed limit sends no probe (0 calls to the stub) and ends limit-unparsed with the hand-off as the recovery"
 
 fixture rprobe 200
+arm_resume rprobe
 mk append "$REC" '{"event":"head-exit","band":80,"context":"c","spent_usd":5}' >/dev/null
 rm -f "$WORK/stub-probe.count"
 RUNENV="STUB_MODE=nolimit STUB_N=1 STUB_TOKENS=50000 AIMYTH_CONTEXT_WINDOW=200000"
@@ -1998,6 +2635,10 @@ verdict "supervisor: with --probe and no reset time it probes under the same log
 
 # ------------------------------------------------------------------------ supervise -------
 fixture rsup 200
+run supervise --run rsup --pid 999999 --dry-run
+need_rc 2
+need_out "is not alive"
+verdict "supervise: an explicit --pid that is not alive is refused — a stopped run has no head to attach to (C2 L5)"
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done"}' > "$WORK/rsup.out"
 sleep 3 &
 SPID=$!
@@ -2345,7 +2986,502 @@ need_nofile "$DRD/record-filtered.jsonl"
 need_eq "$(mk count "$REC" reflect-inputs)" "1" "no second event from the dry run (the control: the write above recorded one)"
 verdict "reflect-inputs --dry-run: the same counts, no file written and no event recorded"
 
+# ------------------------------------------- the console window (IDEAS №139 A2) ------------
+# The viewer key in the grants file, the opener, who opens it, and the failure modes. Every leg
+# runs through the recording stub set up above (AIMYTH_VIEWER_CMD), so no window is ever opened
+# and the assertions are on the stub's argv, the command file and the primitive's own lines.
+PYEXE=$("$PY" -c 'import sys; sys.stdout.write(sys.executable)')
+pmode() { "$PY" -c 'import os, stat, sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[-3:])' "$1"; }
+viewer_last() { tail -1 "$VIEWER_ARGV"; }
+
+VHO="$WORK/handoffs/vw-handoff.md"; mk handoff "$VHO" >/dev/null
+REC="$STORE/spawn-records/rvw.jsonl"; rm -f "$REC"
+GF="$STORE/spawn-records/rvw-grants.json"; rm -f "$GF"
+viewer_use vkey
+run run-open --run rvw --session sid-vw --head "fixture head" --regime single --regime-src owner \
+    --handoff "$VHO" --detail "the viewer key" --pid 1
+need_rc 0
+need_eq "$(vval "$GF")" "terminal" "run-open's default with no file at all"
+need_eq "$(mk field "$REC" run-open viewer)" "terminal" "the run-open event"
+need_eq "$(mk field "$REC" run-open viewer_src)" "default (no grants file)" "the source"
+need_out "viewer terminal (default (no grants file))"
+run grants --run rvw --viewer none
+need_rc 0
+need_eq "$(vval "$GF")" "none" "grants --viewer none rewrites the key"
+need_eq "$(mk field "$REC" grants viewer_src)" "arg" "the flag is the source"
+run grants --run rvw
+need_rc 0
+need_eq "$(vval "$GF")" "none" "positive control: a file WITH the key carries it forward"
+need_eq "$(mk field "$REC" grants viewer_src)" "grants" "positive control: the source reads grants"
+"$PY" -c 'import json, sys
+p = sys.argv[1]; d = json.load(open(p, encoding="utf-8")); d.pop("viewer", None)
+json.dump(d, open(p, "w", encoding="utf-8"))' "$GF"
+need_eq "$(vval "$GF")" "None" "the planted case: the key is gone from the file"
+run grants --run rvw
+need_rc 0
+need_eq "$(vval "$GF")" "terminal" "a file without the key reads terminal"
+need_eq "$(mk field "$REC" grants viewer_src)" "default (key absent)" "the source names the absent key"
+verdict "the viewer key: a grants file WITHOUT it reads terminal, source 'default (key absent)', and no file at all reads 'default (no grants file)' (control: a file with the key reads 'grants')"
+
+REC="$STORE/spawn-records/rvwn.jsonl"; rm -f "$REC"
+GF="$STORE/spawn-records/rvwn-grants.json"; rm -f "$GF"
+viewer_use vflag
+run run-open --run rvwn --session sid-vwn --head "fixture head" --regime single --regime-src owner \
+    --handoff "$VHO" --detail "the flag" --pid 1 --viewer none
+need_rc 0
+need_eq "$(vval "$GF")" "none" "run-open --viewer none"
+need_eq "$(mk field "$REC" run-open viewer)" "none" "the run-open event"
+need_eq "$(mk field "$REC" run-open viewer_src)" "arg" "the source"
+need_out "viewer: none (grants) · no window"
+need_no_viewer
+need_nofile "$(console_cmd rvwn)"
+verdict "the viewer key: run-open --viewer none writes none, records viewer_src arg, opens nothing and writes no command file"
+
+run grants --run rvwn --grant "$WORK/handoffs"
+need_rc 0
+need_eq "$(vval "$GF")" "none" "a rebuild with --grant carries none forward"
+need_eq "$(mk field "$REC" grants viewer_src)" "grants" "carried from the file"
+GRANTED=$("$PY" -c 'import json, sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["grants"]))' "$GF")
+run run-resume --run rvwn --session sid-vwn2 --head "fixture head" --detail "flag-less" --pid 1
+need_rc 0
+need_eq "$(vval "$GF")" "none" "a flag-less run-resume keeps the file"
+need_eq "$(mk field "$REC" run-resume viewer)" "none" "the run-resume event"
+need_eq "$("$PY" -c 'import json, sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["grants"]))' "$GF")" \
+        "$GRANTED" "the kept file's paths are unchanged (both spellings kept)"
+run run-resume --run rvwn --session sid-vwn3 --head "fixture head" --detail "the flag alone" --pid 1 --viewer terminal
+need_rc 0
+need_eq "$(vval "$GF")" "terminal" "--viewer alone rewrites, as --on-limit does"
+need_eq "$(mk field "$REC" run-resume viewer_src)" "arg" "the source"
+verdict "the viewer key: grants --grant and a flag-less run-resume carry it forward untouched, while --viewer alone rewrites it"
+
+REC="$STORE/spawn-records/rvwo.jsonl"; rm -f "$REC"
+CF=$(console_cmd rvwo); rm -f "$CF"
+viewer_use vopen
+run run-open --run rvwo --session sid-vwo --head "fixture head" --regime single --regime-src owner \
+    --handoff "$VHO" --detail "the window" --pid 1
+need_rc 0
+need_eq "$(viewer_calls)" "1" "the opener was called with one argument"
+need_eq "$(viewer_last)" "$CF" "the command file is the LAST argument"
+need_out "viewer: Terminal window on $CF"
+need_file "$CF"
+need_eq "$(pmode "$CF")" "755" "the command file's mode"
+need_eq "$(sed -n 1p "$CF")" "#!/bin/sh" "the command file's first line"
+LINE2=$(sed -n 2p "$CF")
+case $LINE2 in
+  "exec "*" -B "*"handsoff.py watch --run rvwo") : ;;
+  *) why="$why; the exec line reads '$LINE2'" ;;
+esac
+case $LINE2 in *"$PYEXE"*) : ;; *) why="$why; the exec line does not name this interpreter" ;; esac
+verdict "the opener: run-open writes <run>-console.command (0755, exec <this interpreter> -B <this script> watch --run R) and calls the opener with that path as its last argument"
+
+CF=$(console_cmd rvwst)
+# The stale content is assembled from parts so that this file's own source carries no absolute
+# path beside a write verb (the source scan below), and no owner path anywhere.
+STALE_EXE="/nowhere""/python"
+STALE_SRC="/nowhere""/handsoff.py"
+printf '#!/bin/sh\nexec %s -B %s watch --run rvwst\n' "$STALE_EXE" "$STALE_SRC" > "$CF"
+chmod 600 "$CF"
+grep -q 'nowhere' "$CF" || why="$why; positive control: the planted stale line is not in the file"
+REC="$STORE/spawn-records/rvwst.jsonl"; rm -f "$REC"
+viewer_use vstale
+run run-open --run rvwst --session sid-vwst --head "fixture head" --regime single --regime-src owner \
+    --handoff "$VHO" --detail "a stale command file" --pid 1
+need_rc 0
+if grep -q 'nowhere' "$CF"; then why="$why; the stale command file was not rewritten"; fi
+need_eq "$(pmode "$CF")" "755" "the rewritten file's mode"
+need_eq "$(sed -n 2p "$CF" | sed 's/.* watch --run //')" "rvwst" "the rewritten exec line"
+verdict "the opener: a stale <run>-console.command is rewritten and re-moded 0755 (control: the planted stale line is there before the run)"
+
+fixture rvwsuc 200
+viewer_use vsuc
+RUNENV="PATH=$WORK/psnone:$PATH"
+run successor --run rvwsuc --meter-line "$METER" --harness-bin "$WORK/bin/no-such-harness" \
+    --wait-s 1 --max-wait-s 5 --tick-s 1
+need_rc 0
+need_out "viewer: Terminal window on"
+need_viewer_arg "$(console_cmd rvwsuc)"
+need_file "$(console_cmd rvwsuc)"
+sleep 2   # the detached starter aborts on the missing harness; let it go before the next leg
+verdict "successor: with no console alive for the run, one window is opened on it and the primitive still exits 0"
+
+# The grace window (2026-09-08, the run-20260908-n140 launch): run-open and successor a second
+# apart opened two windows, since Terminal had not yet started the first console's process when
+# successor probed the table. A console opened within CONSOLE_START_GRACE_S counts as alive,
+# keyed on the command file's mtime: the opener stamps it at every open and pushes it into the
+# past on a failed open. Legs: a fresh stamp blocks the second window; an old stamp does not; a
+# failed open leaves no fresh stamp; the helper itself on a fresh, an old and a missing file.
+fixture rvwg1 200
+CF=$(console_cmd rvwg1)
+printf '#!/bin/sh\n' > "$CF"; chmod 755 "$CF"    # a command file stamped now: a console starting
+viewer_use vg1
+RUNENV="PATH=$WORK/psnone:$PATH"
+run successor --run rvwg1 --meter-line "$METER" --harness-bin "$WORK/bin/no-such-harness" \
+    --wait-s 1 --max-wait-s 5 --tick-s 1
+need_rc 0
+need_out "may still be starting · no second window"
+need_no_viewer
+sleep 2
+verdict "successor: a console opened within the grace window (a fresh command-file stamp, no process yet) is not doubled — no opener call, the primitive still exits 0"
+
+fixture rvwg2 200
+CF=$(console_cmd rvwg2)
+printf '#!/bin/sh\n' > "$CF"; chmod 755 "$CF"
+"$PY" -c 'import os, sys, time; t = time.time() - 120; os.utime(sys.argv[1], (t, t))' "$CF"
+viewer_use vg2
+RUNENV="PATH=$WORK/psnone:$PATH"
+run successor --run rvwg2 --meter-line "$METER" --harness-bin "$WORK/bin/no-such-harness" \
+    --wait-s 1 --max-wait-s 5 --tick-s 1
+need_rc 0
+need_out "viewer: Terminal window on"
+need_viewer_arg "$CF"
+AGE=$("$PY" -c 'import os, sys, time; print(int(time.time() - os.path.getmtime(sys.argv[1])))' "$CF")
+[ "$AGE" -lt 15 ] || why="$why; the opener did not re-stamp the command file (age ${AGE}s)"
+sleep 2
+verdict "successor: a command file stamped two minutes ago does not count as a starting console — the window is opened and the file is stamped afresh (the control for the grace leg)"
+
+fixture rvwg3 200
+CF=$(console_cmd rvwg3); rm -f "$CF"
+viewer_use vg3
+RUNENV="PATH=$WORK/psnone:$PATH AIMYTH_VIEWER_CMD=$WORK/bin/viewer-fail.sh"
+run successor --run rvwg3 --meter-line "$METER" --harness-bin "$WORK/bin/no-such-harness" \
+    --wait-s 1 --max-wait-s 5 --tick-s 1
+need_rc 0
+need_out "viewer: no Terminal window"
+need_eq "$(viewer_calls)" "1" "positive control: the failing stub was reached"
+AGE=$("$PY" -c 'import os, sys, time; print(int(time.time() - os.path.getmtime(sys.argv[1])))' "$CF")
+[ "$AGE" -ge 15 ] || why="$why; a failed open left a fresh stamp (age ${AGE}s), so it would read as a console starting"
+sleep 2
+verdict "a failed open pushes the command file's stamp past the grace window, so the failure never reads as a console still starting"
+
+CF=$(console_cmd rvwg4)
+printf '#!/bin/sh\n' > "$CF"
+env LLM_WIKI_STORE="$STORE" "$PY" - "$H" rvwg4 "$CF" <<'CSTART' > "$WORK/cs.txt"
+import importlib.util, os, sys, time
+spec = importlib.util.spec_from_file_location("target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+run, path = sys.argv[2], sys.argv[3]
+fresh = mod.console_starting(run)
+t = time.time() - 120; os.utime(path, (t, t))
+old = mod.console_starting(run)
+os.remove(path)
+gone = mod.console_starting(run)
+print("fresh" if fresh is not None and 0 <= fresh < mod.CONSOLE_START_GRACE_S else "fresh=%r" % fresh,
+      old, gone)
+CSTART
+need_eq "$(cat "$WORK/cs.txt")" "fresh None None" "console_starting: a fresh stamp is an age under the grace window; an old stamp and a missing file are None"
+verdict "console_starting: keyed on the command file's stamp alone — fresh counts, old and missing make no claim"
+
+fixture rvwsuc2 200
+plant_console rvwsuc2 watch.py
+viewer_use vsuc2
+RUNENV="PATH=$WORK/psnone:$PATH"
+run successor --run rvwsuc2 --meter-line "$METER" --harness-bin "$WORK/bin/no-such-harness" \
+    --wait-s 1 --max-wait-s 5 --tick-s 1
+need_rc 0
+need_out "a console is already alive (pid $PLANTED)"
+need_no_viewer
+need_nofile "$(console_cmd rvwsuc2)"
+sleep 2
+kill_console
+verdict "successor: a console already alive for the run is never doubled — the pid is named, nothing is opened, no command file is written"
+
+fixture rvwrh 200
+mk append "$REC" '{"event":"head-successor","session_id":"sid-rvwrh","pid":1,"budget":5.0}' >/dev/null
+viewer_use vrh
+run resume-head --run rvwrh --harness-bin "$WORK/bin/no-such-harness" --budget-usd 5 --tick-s 1
+need_rc 0
+need_out "viewer: Terminal window on"
+need_viewer_arg "$(console_cmd rvwrh)"
+sleep 2   # the detached half aborts: the fixture session has no transcript to size
+verdict "resume-head: with no console alive for the run, one window is opened on it and the primitive still exits 0"
+
+fixture rvwrh2 200
+mk append "$REC" '{"event":"head-successor","session_id":"sid-rvwrh2","pid":1,"budget":5.0}' >/dev/null
+plant_console rvwrh2 handsoff.py
+viewer_use vrh2
+run resume-head --run rvwrh2 --harness-bin "$WORK/bin/no-such-harness" --budget-usd 5 --tick-s 1
+need_rc 0
+need_out "a console is already alive (pid $PLANTED)"
+need_no_viewer
+sleep 2
+kill_console
+verdict "resume-head: a console already alive for the run is never doubled (the handsoff.py spelling of the marker)"
+
+viewer_use vspell
+plant_console rvwsp watch.py
+"$PY" - "$H" rvwsp <<'CALIVE' > "$WORK/ca-watch.txt"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+print(len(mod.console_alive(sys.argv[2])), len(mod.console_alive("rvwsp-nobody")))
+CALIVE
+need_eq "$(cat "$WORK/ca-watch.txt")" "1 0" "the watch.py spelling, with the negative control"
+kill_console
+plant_console rvwsp handsoff.py
+"$PY" - "$H" rvwsp <<'CALIVE2' > "$WORK/ca-handsoff.txt"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+print(len(mod.console_alive(sys.argv[2])), len(mod.console_alive("rvwsp-nobody")))
+CALIVE2
+need_eq "$(cat "$WORK/ca-handsoff.txt")" "1 0" "the handsoff.py spelling, with the negative control"
+kill_console
+sleep 1
+"$PY" - "$H" rvwsp <<'CALIVE3' > "$WORK/ca-none.txt"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+print(len(mod.console_alive(sys.argv[2])))
+CALIVE3
+need_eq "$(cat "$WORK/ca-none.txt")" "0" "nothing alive once the planted console is gone"
+verdict "console_alive: both spellings of the marker are found — 'watch.py --run R' as the console RUNS and 'handsoff.py watch --run R' as it is launched — and a run with no console reads 0 (the negative control on each run)"
+
+fixture rvwnone 200
+run grants --run rvwnone --viewer none
+need_rc 0
+viewer_use vnone
+RUNENV="PATH=$WORK/psnone:$PATH"
+run successor --run rvwnone --meter-line "$METER" --harness-bin "$WORK/bin/no-such-harness" \
+    --wait-s 1 --max-wait-s 5 --tick-s 1
+need_rc 0
+need_out "viewer: none (grants)"
+need_no_viewer
+mk append "$REC" '{"event":"head-successor","session_id":"sid-rvwnone","pid":1,"budget":5.0}' >/dev/null
+run resume-head --run rvwnone --harness-bin "$WORK/bin/no-such-harness" --budget-usd 5 --tick-s 1
+need_rc 0
+need_out "viewer: none (grants)"
+need_no_viewer
+need_nofile "$(console_cmd rvwnone)"
+sleep 2
+verdict "viewer none: run-open (above), successor and resume-head each open nothing and write no command file, and each still exits 0"
+
+fixture rvwfail 200
+viewer_use vfail
+RUNENV="PATH=$WORK/psnone:$PATH AIMYTH_VIEWER_CMD=$WORK/bin/viewer-fail.sh"
+run successor --run rvwfail --meter-line "$METER" --harness-bin "$WORK/bin/no-such-harness" \
+    --wait-s 1 --max-wait-s 5 --tick-s 1
+need_rc 0
+need_out "viewer: no Terminal window"
+need_out "exit 1"
+need_out "run by hand: python3 -B"
+need_out "watch --run rvwfail"
+need_eq "$(viewer_calls)" "1" "positive control: the failing stub was reached"
+sleep 2
+verdict "the failing opener: a stub that exits 1 gives one stderr line naming the reason and the by-hand command, and the primitive still exits 0"
+
+fixture rvwpath 200
+viewer_use vpath
+RC=0
+env PATH="$WORK/nopath" AIMYTH_VIEWER_CMD= AIMYTH_VIEWER_ARGV="$VIEWER_ARGV" \
+    LLM_WIKI_STORE="$STORE" AIMYTH_PROJECTS_DIR="$PROJECTS" AIMYTH_STATE_DIR="$STATE" \
+    CLAUDE_PROJECT_DIR="$VAULT" "$PYEXE" -B "$H" successor --run rvwpath --meter-line "$METER" \
+    --harness-bin "$WORK/bin/no-such-harness" --wait-s 1 --max-wait-s 5 --tick-s 1 \
+    >"$WORK/out" 2>"$WORK/err" || RC=$?
+cat "$WORK/out" "$WORK/err" >"$WORK/both"
+need_rc 0
+need_out "viewer: no Terminal window"
+need_out "osascript not on PATH"
+need_out "open not on PATH"
+need_out "run by hand: python3 -B"
+need_no_viewer
+sleep 2
+# the positive control on the same premise: with the stub back, the same command opens one
+fixture rvwpath2 200
+viewer_use vpath2
+RUNENV="PATH=$WORK/psnone:$PATH"
+run successor --run rvwpath2 --meter-line "$METER" --harness-bin "$WORK/bin/no-such-harness" \
+    --wait-s 1 --max-wait-s 5 --tick-s 1
+need_rc 0
+need_out "viewer: Terminal window on"
+sleep 2
+verdict "no osascript and no open on PATH: both are named in one stderr line with the by-hand command and the primitive exits 0 (control: the same call with the opener in place opens one)"
+
+fixture rvwdry 200
+CF=$(console_cmd rvwdry); rm -f "$CF"
+viewer_use vdry
+RUNENV="PATH=$WORK/psnone:$PATH"
+run successor --run rvwdry --dry-run --meter-line "$METER" --harness-bin "$WORK/bin/harness"
+need_rc 0
+need_out "viewer: dry run"
+need_out "would run:"
+need_out "$CF"
+need_nofile "$CF"
+need_no_viewer
+run resume-head --run rvwdry --dry-run --harness-bin "$WORK/bin/stubhead" --meter-line "$METER"
+need_rc 0
+need_out "viewer: dry run"
+need_nofile "$CF"
+need_no_viewer
+REC="$STORE/spawn-records/rvwdry2.jsonl"; rm -f "$REC"
+run run-open --run rvwdry2 --dry-run --session sid-vwdry2 --head "fixture head" --regime single \
+    --regime-src owner --handoff "$VHO" --detail "dry" --pid 1
+need_rc 0
+need_out "viewer: dry run"
+need_out "$(console_cmd rvwdry2)"
+need_nofile "$(console_cmd rvwdry2)"
+need_nofile "$REC"
+need_no_viewer
+verdict "--dry-run on run-open, successor and resume-head: the opener's command line is printed, nothing is called and no command file is written"
+
+# ------------------------------------------ the seed pid (register entry 2026-09-07) -------
+SHO="$WORK/handoffs/vseed-handoff.md"; mk handoff "$SHO" >/dev/null
+PACK=$(printf 'Next: the next item\nNeeds: nothing\nDecided: the pid')
+REC="$STORE/spawn-records/rseedpid.jsonl"; rm -f "$REC"
+viewer_use vseed
+run run-open --run rseedpid --session sid-seedpid --head "the launcher" --regime multi \
+    --regime-src head --handoff "$SHO" --detail "a seeded record" --pid 93910 \
+    --session-kind seed --envelope-usd 200
+need_rc 0
+need_eq "$(mk field "$REC" run-open pid)" "93910" "the seed's recorded pid"
+# No --pid, and every ps row answers `claude`: the parent walk would take THIS shell's pid,
+# which is the fault the register entry names. The seed's own recorded pid must win.
+RUNENV="PATH=$WORK/psclaude:$PATH"
+run handoff --run rseedpid --final --band 80 --inflight "$PACK"
+need_rc 0
+need_out "handoff: pid 93910 (run-open, seed)"
+need_eq "$(mk field "$REC" head-exit pid)" "93910" "the head-exit takes the seed's pid"
+need_absent "(parent-walk)"
+verdict "handoff --final on a SEEDED record without --pid takes the seed run-open's pid and says so ('pid 93910 (run-open, seed)'), never the parent walk to the calling session"
+
+REC="$STORE/spawn-records/rheadpid.jsonl"; rm -f "$REC"
+run run-open --run rheadpid --session sid-headpid --head "a head" --regime multi \
+    --regime-src head --handoff "$SHO" --detail "a head record" --pid 55555 --envelope-usd 200
+need_rc 0
+need_eq "$(mk field "$REC" run-open session_kind)" "head" "not a seed"
+RUNENV="PATH=$WORK/psclaude:$PATH"
+run handoff --run rheadpid --final --band 80 --inflight "$PACK"
+need_rc 0
+need_out "(parent-walk)"
+need_absent "(run-open, seed)"
+if [ "$(mk field "$REC" head-exit pid)" = "55555" ]; then
+  why="$why; the head record's head-exit took the run-open pid instead of the walk"
+fi
+REC="$STORE/spawn-records/rheadpid2.jsonl"; rm -f "$REC"
+run run-open --run rheadpid2 --session sid-headpid2 --head "a head" --regime multi \
+    --regime-src head --handoff "$SHO" --detail "no ancestor" --pid 55555 --envelope-usd 200
+RUNENV="PATH=$WORK/psnone:$PATH"
+run handoff --run rheadpid2 --final --band 80 --inflight "$PACK"
+need_rc 0
+need_out "handoff: pid none (none)"
+need_eq "$(mk field "$REC" head-exit pid)" "<no key pid>" "no pid on the head-exit"
+verdict "handoff --final on a HEAD record is unchanged: the parent walk still decides (parent-walk under the claude ps stub, none under the empty one), and the run-open pid is never taken"
+
+# The same rule where `successor` writes the FIRST head-exit itself (register entry 2026-09-08):
+# the head never wrote one, so the pid on it — and the predecessor pid the starter then waits
+# on, which reads that event — came from the parent walk. Under the psclaude stub every ps row
+# answers `claude`, so the walk would take THIS shell's pid and the starter would wait on the
+# suite instead of the launcher shell: the fault the seed pid closes.
+REC="$STORE/spawn-records/rsucseed.jsonl"; rm -f "$REC"
+run run-open --run rsucseed --session sid-sucseed --head "the launcher" --regime multi \
+    --regime-src head --handoff "$SHO" --detail "a seeded record" --pid 93911 \
+    --session-kind seed --envelope-usd 200
+need_rc 0
+need_eq "$(mk field "$REC" run-open pid)" "93911" "the seed's recorded pid"
+RUNENV="PATH=$WORK/psclaude:$PATH"
+run successor --run rsucseed --dry-run --budget-usd 5 --meter-line "$METER" \
+    --harness-bin "$WORK/bin/harness"
+need_rc 0
+need_out "successor: pid 93911 (run-open, seed)"
+need_absent "(parent-walk)"
+need_eq "$(mk field "$REC" head-exit pid)" "<no head-exit event>" "the dry run wrote no head-exit"
+# The real run, which appends the head-exit before it detaches its starter. --budget-usd is any
+# cap at all (it only keeps the meter out of the leg, as the seed skip already would); the
+# harness name does not exist and the three waits are 1/5/1 s, so the detached starter finds
+# nothing to start and gives up at once — the pattern the viewer successor legs above use.
+RUNENV="PATH=$WORK/psclaude:$PATH"
+run successor --run rsucseed --budget-usd 5 --meter-line "$METER" \
+    --harness-bin "$WORK/bin/no-such-harness" --wait-s 1 --max-wait-s 5 --tick-s 1
+need_rc 0
+need_out "successor: pid 93911 (run-open, seed)"
+need_eq "$(mk field "$REC" head-exit pid)" "$(mk field "$REC" run-open pid)" "the head-exit's pid is the run-open's"
+verdict "successor on a SEEDED record without --pid takes the seed run-open's pid for the first head-exit it writes ('successor: pid 93911 (run-open, seed)'), never the parent walk to the calling session"
+
+REC="$STORE/spawn-records/rsuchead.jsonl"; rm -f "$REC"
+run run-open --run rsuchead --session sid-suchead --head "a head" --regime multi \
+    --regime-src head --handoff "$SHO" --detail "a head record" --pid 55556 --envelope-usd 200
+need_rc 0
+need_eq "$(mk field "$REC" run-open session_kind)" "head" "not a seed"
+RUNENV="PATH=$WORK/psclaude:$PATH"
+run successor --run rsuchead --budget-usd 5 --meter-line "$METER" \
+    --harness-bin "$WORK/bin/no-such-harness" --wait-s 1 --max-wait-s 5 --tick-s 1
+need_rc 0
+need_out "(parent-walk)"
+need_absent "(run-open, seed)"
+XPID=$(mk field "$REC" head-exit pid)
+if [ "$XPID" = "$(mk field "$REC" run-open pid)" ]; then
+  why="$why; the head record's head-exit took the run-open pid (55556) instead of the walk"
+fi
+case $XPID in
+  ''|*[!0-9]*) why="$why; positive control: the walk recorded no pid on the head-exit ('$XPID')" ;;
+esac
+verdict "successor on a HEAD record is unchanged: the parent walk decides the first head-exit's pid (a live pid under the claude ps stub, never the run-open's 55556)"
+
+REC="$STORE/spawn-records/rsucarg.jsonl"; rm -f "$REC"
+run run-open --run rsucarg --session sid-sucarg --head "the launcher" --regime multi \
+    --regime-src head --handoff "$SHO" --detail "a seeded record" --pid 93911 \
+    --session-kind seed --envelope-usd 200
+need_rc 0
+RUNENV="PATH=$WORK/psclaude:$PATH"
+run successor --run rsucarg --dry-run --pid 41414 --budget-usd 5 --meter-line "$METER" \
+    --harness-bin "$WORK/bin/harness"
+need_rc 0
+need_out "successor: pid 41414 (arg)"
+need_absent "(run-open, seed)"
+# A seed run-open that recorded no pid has nothing better to take, so the walk answers as before.
+REC="$STORE/spawn-records/rsucnopid.jsonl"; rm -f "$REC"
+RUNENV="PATH=$WORK/psnone:$PATH"
+run run-open --run rsucnopid --session sid-sucnopid --head "the launcher" --regime multi \
+    --regime-src head --handoff "$SHO" --detail "a seed with no pid" --session-kind seed \
+    --envelope-usd 200
+need_rc 0
+need_eq "$(mk field "$REC" run-open session_kind)" "seed" "a seeded record"
+need_eq "$(mk field "$REC" run-open pid)" "<no key pid>" "with no pid of its own"
+RUNENV="PATH=$WORK/psnone:$PATH"
+run successor --run rsucnopid --dry-run --budget-usd 5 --meter-line "$METER" \
+    --harness-bin "$WORK/bin/harness"
+need_rc 0
+need_out "successor: pid none (none)"
+need_absent "(run-open, seed)"
+verdict "successor: --pid wins on a seeded record ('pid 41414 (arg)'), and a seed run-open that recorded no pid falls through to the walk ('pid none (none)')"
+
 # --------------------------------------------------------------------- controls ------------
+"$PY" - "$H" > "$WORK/shipsafe.txt" <<'SHIPSAFE'
+import re, sys
+PATTERNS = (("owner path", r"/(?:Users|home)/[A-Za-z0-9._-]+"),
+            ("user or store name", r"(?i)\b" + "|\\b".join(w[::-1] for w in ("gnarej", "yrrej", "evirdeno", "563suxen")) + r"\b"),
+            ("session id", r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"),
+            ("uid", r"\buid=\d+\b"),
+            ("run id", r"\brun-20\d{6}[A-Za-z0-9-]*"))
+src = open(sys.argv[1], encoding="utf-8").read()
+total = 0
+for name, pattern in PATTERNS:
+    hits = re.findall(pattern, src)
+    total += len(hits)
+    if hits:
+        print("%s: %s" % (name, ", ".join(sorted(set(hits))[:4])))
+print("hits %d" % total)
+SHIPSAFE
+SHIP=$(tail -1 "$WORK/shipsafe.txt")
+need_eq "$SHIP" "hits 0" "ship-safe sweep of handsoff.py"
+# Assembled from parts, so this file's own source carries no owner path, session id or run id.
+{ printf 'HOME_DIR = "%s%s"\n' "/Users" "/example-owner/vault"
+  printf 'SESSION = "%s-1111-2222-3333-444455556666"\n' "7c77ff5b"
+  printf 'RUN = "%s%s"\n' "run-2026" "0101-example"; } > "$WORK/planted-owner.py"
+SHIPCTRL=$("$PY" - "$WORK/planted-owner.py" <<'SHIPSAFE2' | tail -1
+import re, sys
+PATTERNS = (("owner path", r"/(?:Users|home)/[A-Za-z0-9._-]+"),
+            ("user or store name", r"(?i)\b" + "|\\b".join(w[::-1] for w in ("gnarej", "yrrej", "evirdeno", "563suxen")) + r"\b"),
+            ("session id", r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"),
+            ("uid", r"\buid=\d+\b"),
+            ("run id", r"\brun-20\d{6}[A-Za-z0-9-]*"))
+src = open(sys.argv[1], encoding="utf-8").read()
+total = sum(len(re.findall(p, src)) for _, p in PATTERNS)
+print("hits %d" % total)
+SHIPSAFE2
+)
+need_eq "$SHIPCTRL" "hits 3" "positive control: the planted file's three literals"
+verdict "ship-safe: no owner path, user or store name, session id, uid or run id is a literal in handsoff.py ($SHIP; control: 3 planted hits)"
+
 NEG=$(grep -c 'tests the wrong' "$H")
 need_eq "$NEG" "0" "negative control: the lifted refusal's phrase"
 POS=$(grep -c 'unmetered-loop' "$H")
@@ -2535,6 +3671,25 @@ need_rc 0
 need_eq "$(grep -c '| 11.7 min · phase-boundary.idle_min · head idle: no lane running and no head call, gaps above 60 s, the head.s calls from its transcript (idle_src transcript)' "$WTI")" "1" "the transcript-sourced idle row"
 verdict "waste-table: the rows say the new meanings and their source — the resumed cut lane is not lost, the lost-lane cost names its exclusion, idle names transcript or record, rewrites names its base — and the legend carries them"
 
+# The soft cap the wrapper logs at every close had no reader until this table (critic finding
+# F4, 2026-09-07): a completed lane over its class's soft threshold gets a row of its own, a
+# lost one carries the note on the row it already had, and a close without the flag gets none.
+fixture rsoft 200
+mk append "$REC" '{"event":"lane-closed","lane":"S1","exit_class":"completed","total_cost_usd":12.0,"soft_usd":9.67,"soft_exceeded":true,"report_words":5}' >/dev/null
+mk append "$REC" '{"event":"lane-closed","lane":"S2","exit_class":"completed","total_cost_usd":1.0,"soft_usd":9.67,"soft_exceeded":false,"report_words":5}' >/dev/null
+mk append "$REC" '{"event":"lane-closed","lane":"S3","exit_class":"budget","total_cost_usd":3.0,"soft_usd":2.14,"soft_exceeded":true,"report_words":5}' >/dev/null
+WSC="$WORK/rsoft-table.md"
+run waste-table --run rsoft --out "$WSC" --no-meter
+need_rc 0
+need_eq "$(grep -c 'soft-cap lane · S1 · exit class completed | soft-cap: \$12.00 over \$9.67 (class) · lane-closed.soft_exceeded · logged at the close, never a stop | arguable | unrouted' "$WSC")" "1" "the completed lane's soft-cap row"
+need_eq "$(grep -c 'S2' "$WSC")" "0" "a close whose soft_exceeded is false gets no row (the control)"
+verdict "waste-table (F4): a completed lane billed over its class's soft threshold gets a row of its own, arguable in kind and routed like any other finding, while a close carrying soft_exceeded false gets none"
+
+need_eq "$(grep -c 'lost lane · S3 · exit class budget | \$3.00 · lane-closed.total_cost_usd · S3 at .* · soft-cap: \$3.00 over \$2.14 (class) | real | unrouted' "$WSC")" "1" "the lost lane's row carries the note"
+need_eq "$(grep -c 'soft-cap' "$WSC")" "3" "the two rows and the legend sentence, and nothing else"
+need_eq "$(grep -c 'the line is logged, never a stop, and the head ledgers it at the lane.s close' "$WSC")" "1" "the legend sentence"
+verdict "waste-table (F4): a lost lane that also crossed its soft threshold carries the note on the row it already had, and the legend says the threshold is logged rather than enforced and where the head puts it"
+
 fixture rold 200
 B0=$(printf '{"event":"phase-boundary","from":"1","to":"2","meter":"%s","idle_min":2.0,"denials":0,"over_cap_reports":0,"respawn_cost_usd":1.0,"rewrites":3}' "$METER")
 mk append "$REC" "$B0" >/dev/null
@@ -2546,6 +3701,240 @@ need_eq "$(grep -c 'a boundary written before the resume exclusion' "$WTO")" "1"
 need_eq "$(grep -c 'a boundary written before the delta rule' "$WTO")" "1" "the old rewrites row"
 need_eq "$(grep -c 'idle_src transcript' "$WTO")" "1" "the transcript source named by the legend only"
 verdict "waste-table: a boundary written before the 2026-09-06 meanings is quoted as recorded, each of the three rows naming the rule it predates (the control: the new-meaning strings appear in the legend alone)"
+
+# ------------------------------- the five fixes of 2026-09-07 (T6, T7, T8 and two entries) --
+# (a) T7: run-open --session-kind, written as session_kind, and the seed session skipped by the
+# waste table's head rows and named once in its legend line.
+HO="$WORK/handoffs/rskind-handoff.md"; mk handoff "$HO" >/dev/null
+REC="$STORE/spawn-records/rskind.jsonl"; rm -f "$REC"
+run run-open --run rskind --session sid-seedplace --head "launcher" --regime multi \
+    --regime-src owner --handoff "$HO" --detail "a seeded launch" --pid 4242 \
+    --envelope-usd 400 --session-kind seed
+need_rc 0
+need_out "session_kind seed"
+need_eq "$(mk field "$REC" run-open session_kind)" "seed" "session_kind on the run-open event"
+HO2="$WORK/handoffs/rhkind-handoff.md"; mk handoff "$HO2" >/dev/null
+rm -f "$STORE/spawn-records/rhkind.jsonl"
+run run-open --run rhkind --session sid-realhead --head "head" --regime multi \
+    --regime-src owner --handoff "$HO2" --detail "an ordinary launch" --pid 4242
+need_rc 0
+need_eq "$(mk field "$STORE/spawn-records/rhkind.jsonl" run-open session_kind)" "head" \
+        "positive control: the default is head, never absent"
+verdict "run-open: --session-kind seed is written as session_kind on the run-open event and named on the line, and the flag defaults to head (T7)"
+
+mk append "$REC" '{"event":"head-exit","band":"unmetered","context":"unmetered (transcript missing: a path that is not there)","exit_class":"error","pack":false}' >/dev/null
+mk append "$REC" '{"event":"head-successor","session_id":"sid-realsucc","pid":1,"budget":1.0}' >/dev/null
+mk append "$REC" '{"event":"run-resume","session":"sid-realsucc","head":"h","detail":"the successor records itself","pid_src":"none"}' >/dev/null
+mk append "$REC" '{"event":"gate","item":"one","context":100000,"percent":10,"band":0,"metered":true,"orientation_tokens":4000}' >/dev/null
+WSK="$WORK/rskind-table.md"
+run waste-table --run rskind --out "$WSK" --no-meter
+need_rc 0
+need_eq "$(grep -c '1 head session(s)' "$WSK")" "1" "the seed session is not a head session"
+need_eq "$(grep -c 'seed (skipped): sid-seedplace' "$WSK")" "1" "one seed line in the legend"
+need_eq "$(grep -c '^| orientation cost · head sid-realsucc' "$WSK")" "1" "positive control: the real head still has its row"
+need_eq "$(grep -c '^| orientation cost · head sid-seedplace' "$WSK")" "0" "the seed session renders no head row"
+need_eq "$(grep -c 'Head sessions are counted by DISTINCT session id (sid-realsucc)' "$WSK")" "1" "the head named is the real one"
+WSK2="$WORK/rwaste-noseed.md"
+run waste-table --run rwaste --out "$WSK2" --no-meter
+need_eq "$(grep -c 'seed (skipped): none' "$WSK2")" "1" "control: a record marking no seed says so rather than dropping the line"
+verdict "waste-table: a session run-open marks seed is skipped by the head rows and named once as 'seed (skipped)', while a record with no seed says none (T7)"
+
+# (b) T6: the run's own window, and the --start/--end pair passed to the meter.
+fixture rwin 200
+mk append "$REC" '{"event":"phase-boundary","from":"1","to":"2","idle_min":0.0}' >/dev/null
+mk append "$REC" '{"event":"run-close","items":"1","register":"none"}' >/dev/null
+"$PY" - "$H" "$REC" <<'WINDOW' > "$WORK/window.txt"
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+evs = [json.loads(l) for l in open(sys.argv[2], encoding="utf-8") if l.strip()]
+start, end, src = mod.run_window(evs)
+cmd = mod.meter_cmd("/nowhere/fable-share.py", "rwin", "sid-rwin", mod.run_open(evs), "auto",
+                    start, end)
+print(start)
+print(end)
+print(src)
+print(" ".join(cmd))
+WINDOW
+need_eq "$(sed -n 1p "$WORK/window.txt")" "$(mk field "$REC" run-open ts)" "the window opens at run-open"
+need_eq "$(sed -n 2p "$WORK/window.txt")" "$(mk field "$REC" run-close ts)" "the window closes at run-close"
+case $(sed -n 4p "$WORK/window.txt") in
+  *"--start $(mk field "$REC" run-open ts) --end $(mk field "$REC" run-close ts)"*) : ;;
+  *) why="$why; the meter command carries no --start/--end pair: $(sed -n 4p "$WORK/window.txt")" ;;
+esac
+fixture rwin2 200
+mk append "$REC" '{"event":"phase-boundary","from":"1","to":"2","idle_min":0.0}' >/dev/null
+"$PY" - "$H" "$REC" <<'WINDOW2' > "$WORK/window2.txt"
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("target", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+evs = [json.loads(l) for l in open(sys.argv[2], encoding="utf-8") if l.strip()]
+start, end, src = mod.run_window(evs)
+print(end)
+print(src)
+WINDOW2
+need_eq "$(sed -n 1p "$WORK/window2.txt")" "$(mk field "$REC" phase-boundary ts)" "control: no run-close ends the window at the record's last event"
+case $(sed -n 2p "$WORK/window2.txt") in
+  *"no run-close"*) : ;;
+  *) why="$why; the window source does not say the run-close is missing: $(sed -n 2p "$WORK/window2.txt")" ;;
+esac
+verdict "waste-table (T6): the run's own window is run-open to run-close, else the record's last event, and the meter command carries it as --start/--end"
+
+fixture rwinrow 200
+BW=$(printf '{"event":"phase-boundary","from":"1","to":"2","meter":"%s","idle_min":0.0,"denials":0,"over_cap_reports":0,"respawn_cost_usd":0.0}' "$METER")
+mk append "$REC" "$BW" >/dev/null
+WWR="$WORK/rwinrow-table.md"
+WINLINE='billed (list 2026-09-03) · head $5.00 · lanes $2.00 · session $7.00 · rewrites 0 ($0.00) · metered 1 of 1'
+run waste-table --run rwinrow --out "$WWR" --meter-line "sid-rwinrow=$WINLINE"
+need_rc 0
+need_eq "$(grep -c 'run total (shown sum) | \$7.00 = \$7.00' "$WWR")" "1" "the window figure wins over the session-wide billed line"
+need_eq "$(grep -c "metered over the run's window: \$7.00 (the record gives the last boundary billed line" "$WWR")" "1" "the row says which figure it took and what the record gave"
+need_eq "$(grep -c 'envelope base \$200.00 (run-open.envelope_usd)' "$WWR")" "1" "the envelope base beside the total"
+WWR2="$WORK/rwinrow-norow.md"
+run waste-table --run rwinrow --out "$WWR2" --no-meter
+need_eq "$(grep -c 'run total (shown sum) | \$19.62 = \$19.62' "$WWR2")" "1" "control: without a window figure the row falls back to the record's own"
+verdict "waste-table (T6): the whole-run row takes the head's window meter figure over the session-wide billed line, names both and prints the envelope base"
+
+# (b) the register entry of 2026-09-06: the under-read, the head count and the limit wait.
+fixture rlater 100
+BL=$(printf '{"event":"phase-boundary","from":"1","to":"2","meter":"%s","idle_min":0.0,"denials":0,"over_cap_reports":0,"respawn_cost_usd":0.0}' "$METER")
+mk append "$REC" "$BL" >/dev/null
+mk append "$REC" '{"event":"head-exit","band":0,"context":"362,843 tokens (36 %)","spent_usd":56.26,"pack":true}' >/dev/null
+WLA="$WORK/rlater-table.md"
+run waste-table --run rlater --out "$WLA" --no-meter
+need_rc 0
+need_eq "$(grep -c 'run total (shown sum) | \$56.26 = \$56.26' "$WLA")" "1" "the later head-exit spend, not the earlier billed line"
+need_eq "$(grep -c 'head-exit.spent_usd \$56.26, later in the record than the last boundary billed line \$19.62' "$WLA")" "1" "the row names both figures and which is later"
+fixture rearlier 100
+mk append "$REC" '{"event":"head-exit","band":0,"context":"c","spent_usd":5.0,"pack":true}' >/dev/null
+mk append "$REC" "$BL" >/dev/null
+WEA="$WORK/rearlier-table.md"
+run waste-table --run rearlier --out "$WEA" --no-meter
+need_eq "$(grep -c 'run total (shown sum) | \$19.62 = \$19.62' "$WEA")" "1" "control: a boundary later than the head-exit keeps the billed line"
+verdict "waste-table (register 2026-09-06): per head the run total takes the LATER of the last boundary billed line and head-exit.spent_usd, so a head that exits without a boundary loses no spend"
+
+fixture rids 100
+mk append "$REC" '{"event":"head-successor","session_id":"sid-two","pid":1,"budget":1.0}' >/dev/null
+mk append "$REC" '{"event":"run-resume","session":"sid-two","head":"h","detail":"the successor records itself","pid_src":"none"}' >/dev/null
+mk append "$REC" '{"event":"head-successor","session_id":"sid-two","pid":1,"budget":1.0}' >/dev/null
+WID="$WORK/rids-table.md"
+run waste-table --run rids --out "$WID" --no-meter
+need_rc 0
+need_eq "$(grep -c '2 head session(s)' "$WID")" "1" "four spans over two distinct ids read as two heads"
+need_eq "$(grep -c 'Head sessions are counted by DISTINCT session id (sid-rids, sid-two)' "$WID")" "1" "the ids are named"
+mk append "$REC" '{"event":"head-successor","session_id":"sid-three","pid":1,"budget":1.0}' >/dev/null
+WID2="$WORK/rids2-table.md"
+run waste-table --run rids --out "$WID2" --no-meter
+need_eq "$(grep -c '3 head session(s)' "$WID2")" "1" "positive control: a third id moves the count to three"
+verdict "waste-table (register 2026-09-06): head sessions are counted by distinct session id, four spans of two ids reading as two heads"
+
+# The record's own run-open sits two hours back, so the planted wait is stamped inside that
+# span (a stop 60 minutes back, its resume 30 minutes back) rather than on a fixed date.
+fixture rlimit 100
+STOP_TS=$("$PY" -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() - 3600)))')
+RES_TS=$("$PY" -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() - 1800)))')
+mk append "$REC" "{\"event\":\"stop-condition\",\"which\":\"limit\",\"lane\":\"head\",\"action\":\"wait until the reset\",\"ts\":\"$STOP_TS\"}" >/dev/null
+mk append "$REC" "{\"event\":\"head-resumed\",\"session_id\":\"sid-rlimit\",\"pid\":1,\"context\":136346,\"waited_s\":1800,\"ts\":\"$RES_TS\"}" >/dev/null
+BLIM=$(printf '{"event":"phase-boundary","from":"2","to":"3","meter":"%s","idle_min":40.0,"idle_src":"transcript","denials":0,"over_cap_reports":0,"respawn_cost_usd":0.0}' "$METER")
+mk append "$REC" "$BLIM" >/dev/null
+WLI="$WORK/rlimit-table.md"
+run waste-table --run rlimit --out "$WLI" --no-meter
+need_rc 0
+need_eq "$(grep -c "^| limit wait · limit → head-resumed at $RES_TS | 30.0 min" "$WLI")" "1" "the structural row for the recorded limit wait"
+need_eq "$(grep -c 'not head idleness: a boundary whose span covers it counts the same minutes under idle_min | structural' "$WLI")" "1" "the row's kind and its reason"
+need_eq "$(grep -c 'of which 30.0 min is a recorded limit wait' "$WLI")" "1" "the idle row says how much of it is the wait"
+need_eq "$(grep -c '^| limit wait' "$WTR")" "0" "control: a record with no stop-condition renders no limit-wait row"
+verdict "waste-table (register 2026-09-06): a stop-condition and its head-resumed take a structural row of their own and the idle row that covers them says how many of its minutes they hold"
+
+# (c) T8: the over-cap row carries the cut tail's price, never the lane's whole cost.
+fixture rtail 200
+mk append "$REC" '{"event":"lane-open","lane":"L9","class":"builder","model":"claude-opus-5","budget_usd":15.0}' >/dev/null
+mk append "$REC" '{"event":"lane-closed","lane":"L9","exit_class":"completed","total_cost_usd":14.57,"report_words":1000,"report_cut":true}' >/dev/null
+mk append "$REC" '{"event":"lane-open","lane":"L8","class":"verifier","model":"claude-sonnet-5","budget_usd":2.0}' >/dev/null
+mk append "$REC" '{"event":"lane-closed","lane":"L8","exit_class":"completed","total_cost_usd":0.39,"report_words":800,"report_cut":false}' >/dev/null
+BT=$(printf '{"event":"phase-boundary","from":"1","to":"2","meter":"%s","idle_min":0.0,"denials":0,"over_cap_reports":1,"respawn_cost_usd":0.0}' "$METER")
+mk append "$REC" "$BT" >/dev/null
+WTT="$WORK/rtail-table.md"
+run waste-table --run rtail --out "$WTT" --no-meter
+need_rc 0
+need_eq "$(grep -c 'cut tail \$0.01 · the tail alone (report_words − 800), never the lane.s whole cost: L9 200 words over = \$0.0065 (opus output \$25.00/MTok)' "$WTT")" "1" "the cut tail priced at the lane's model's output rate"
+need_eq "$(grep -c '1.3 tokens per word, set by judgement, unmeasured' "$WTT")" "2" "the ratio and its standing, in the row and in the legend"
+need_eq "$(grep -c 'L8' "$WTT")" "0" "a lane at the cap contributes nothing to the row"
+need_eq "$(grep -c '14.57' "$WTT")" "0" "the lane's whole cost is not the figure"
+verdict "waste-table (T8): the over-cap row carries the cut tail (report_words − 800 at the model's output rate), a lane at the cap contributing nothing and the lane's whole cost nowhere in it"
+
+fixture rtail2 200
+mk append "$REC" '{"event":"lane-closed","lane":"L7","exit_class":"completed","total_cost_usd":1.0,"report_words":900}' >/dev/null
+mk append "$REC" '{"event":"lane-open","lane":"L6","class":"builder","model":"fable-1","budget_usd":15.0}' >/dev/null
+mk append "$REC" '{"event":"lane-closed","lane":"L6","exit_class":"completed","total_cost_usd":1.0,"report_words":900}' >/dev/null
+BT2=$(printf '{"event":"phase-boundary","from":"1","to":"2","meter":"%s","idle_min":0.0,"denials":0,"over_cap_reports":2,"respawn_cost_usd":0.0}' "$METER")
+mk append "$REC" "$BT2" >/dev/null
+WT7="$WORK/rtail2-table.md"
+run waste-table --run rtail2 --out "$WT7" --no-meter
+need_rc 0
+need_eq "$(grep -c 'L7 100 words over (unpriced: the record names no model for this lane)' "$WT7")" "1" "a lane whose model the record does not name is counted in words and left unpriced"
+need_eq "$(grep -c 'L6 100 words over = \$0.0065 (fable output \$50.00/MTok)' "$WT7")" "1" "positive control: the priced lane in the same span"
+need_eq "$(grep -c 'over the priced tail(s)' "$WT7")" "1" "the total says it covers the priced tails alone"
+verdict "waste-table (T8): a lane whose model the record does not name is counted in words and never guessed at a price, beside a priced lane in the same span"
+
+# (d) the extraction carries an assistant record's tool calls, never their results.
+mk toolscript sid-tools >/dev/null
+TX="$WORK/tools"
+run extract-transcript --session sid-tools --out "$TX"
+need_rc 0
+need_out "2 turns (1 human, 1 assistant) of 6 records"
+need_out "2 tool-call turn(s)"
+need_eq "$(grep -c '^## turn 2 · assistant · tool calls · 2026-09-07T10:00:10Z' "$TX/turns.md")" "1" "the tool-call turn's heading"
+need_eq "$(grep -c '^- Bash: git status --porcelain' "$TX/turns.md")" "1" "the Bash call carries its command"
+need_eq "$(grep -c '^- Read: /fixture/page.md' "$TX/turns.md")" "1" "the Read call carries its file path"
+need_eq "$(grep -c '^- Grep: needle' "$TX/turns.md")" "1" "the Grep call carries its pattern"
+need_eq "$(grep -c '^- TodoWrite$' "$TX/turns.md")" "1" "a tool outside the table prints its name alone"
+need_eq "$(grep -c 'the tool result never reaches the extraction' "$TX/turns.md")" "0" "the tool result is out, as before"
+# A repetition count above 255 is outside POSIX grep, so the long line is matched by its head
+# and its cut marker and measured in Python.
+need_eq "$(grep -c ' …\[cut\]$' "$TX/turns.md")" "1" "one line carries the cut marker"
+need_eq "$(grep -c '^- Bash: yyyyyyyyyy' "$TX/turns.md")" "1" "the long command's own line"
+CUTLEN=$("$PY" -c 'import sys; print(max(len(x.rstrip(chr(10))) for x in open(sys.argv[1], encoding="utf-8") if x.startswith("- Bash: y")))' "$TX/turns.md")
+need_eq "$CUTLEN" "300" "the cut line is exactly 300 characters"
+verdict "extract-transcript: an assistant record of tool calls alone is a tool-call turn, one line per call with the tool's name and its command, path or pattern, cut at 300 characters (register 2026-09-07)"
+
+need_eq "$(mk json "$TX/counts.json" tool_call_turns)" "2" "tool_call_turns in counts.json"
+need_eq "$(mk json "$TX/counts.json" extracted)" "2" "extracted counts the prose turns alone"
+"$PY" -c 'import json,sys; c=json.load(open(sys.argv[1])); print(c["records"], c["extracted"] + c["tool_call_turns"] + sum(c["excluded"].values()))' \
+      "$TX/counts.json" > "$WORK/sum.txt"
+need_eq "$(cut -d" " -f1 "$WORK/sum.txt")" "$(cut -d" " -f2 "$WORK/sum.txt")" "records = extracted + tool_call_turns + excluded"
+need_eq "$(grep -c 'Records = 2 extracted + 2 tool-call + 2 excluded = 6' "$TX/turns.md")" "1" "the extraction states the arithmetic"
+need_eq "$(grep -c '^## turn 3 · assistant · 2026-09-07T10:00:20Z' "$TX/turns.md")" "1" "a record with prose AND calls keeps its prose turn"
+need_eq "$(grep -c '^- Edit: /fixture/other.md' "$TX/turns.md")" "1" "and its tool calls go under that turn"
+need_eq "$(mk json "$EX/counts.json" tool_call_turns)" "1" "positive control: the first extraction's own tool-call record"
+verdict "extract-transcript: counts.json carries tool_call_turns and records = extracted + tool_call_turns + excluded holds, a record with prose and calls keeping one turn"
+
+RTD="$WORK/rrefl-tools"
+run reflect-inputs --run rrefl --session sid-tools --out "$RTD" --no-meter
+need_rc 0
+need_out "2 tool-call turn(s)"
+need_eq "$(mk field "$STORE/spawn-records/rrefl.jsonl" reflect-inputs counts | grep -c 'tool_call_turns')" "1" "the event's counts carry the figure"
+verdict "reflect-inputs: the tool-call turns reach the reflector's input set and the count is on the event"
+
+# (e) the successor sizes its cap from the envelope when the last head-exit is a seed exit.
+fixture rseedsucc 400
+mk append "$REC" '{"event":"head-exit","band":"unmetered","context":"unmetered (transcript missing: a path that is not there)","exit_class":"error","pack":false}' >/dev/null
+RUNENV="PATH=$WORK/psnone:$PATH"
+run successor --run rseedsucc --dry-run --harness-bin "$WORK/bin/harness"
+need_rc 0
+need_out "budget_src: envelope (seed)"
+need_out "budget \$400.00"
+need_absent "pass --budget-usd"
+fixture rmetsucc 400
+mk append "$REC" '{"event":"head-exit","band":0,"context":"500,000 tokens (50 %)","spent_usd":40.0,"pack":true}' >/dev/null
+RUNENV="PATH=$WORK/psnone:$PATH"
+run successor --run rmetsucc --dry-run --meter-line "$METER" --harness-bin "$WORK/bin/harness"
+need_rc 0
+need_out "budget \$360.00"
+need_absent "envelope (seed)"
+verdict "successor: a seed head-exit sizes the cap at the envelope minus recorded spend (budget_src: envelope (seed)), while a metered head-exit takes the ordinary remainder (register 2026-09-07)"
 
 # ----------------------------------------------------------------------------- summary -----
 printf '\n'

@@ -29,7 +29,9 @@ GRANTS
 DECISIONS: {{the run's decisions that bear on this task, and what sibling lanes hold | none}} — a decision the task needs and the brief lacks is a gap the lane reports, never a guess (A1).
 {{headless lanes: the read directories, the write scope and any add-on granted beyond the
 class row, each with its reason — so a refused path reads as a gap to report, never as a
-mistake to work around | in-session: "n/a — inherited"}}
+mistake to work around; every path and command literal, as the fence will see it — no `Let X =`
+shorthand and no pasteable placeholder, since a fenced lane copies a shorthand into a shell
+variable the fence reads as an ungranted root (eight denials, 2026-09-06) | in-session: "n/a — inherited"}}
 
 VERIFICATION
 - Horizon control (replaces the solo nonce check): target file exists and is non-zero;
@@ -47,7 +49,8 @@ selected controls live only in the spawn record. A transcript-grounded observati
 
 REPORT
 ## Horizon (read k of N; extraction method) · ## Candidate table (proposed + discarded,
-all named) · ## Controls
+all named) · ## Controls. At most 800 words of prose; the candidate table is exempt from the
+count (owner ruling 2026-09-06).
 ```
 
 <!-- Spawner: pre-register 2–3 already-recorded events in the spawn record BEFORE spawning
@@ -60,4 +63,10 @@ session — a same-session-recorded event reads as an obviously-shipped discard 
 skip enumerating, so its absence proves nothing. Pick events whose recording lives in a
 different session's pages, so they look novel to the sweep and only the dedup hunt can kill
 them. Avoid events whose only trace sits in tool results (excluded channel). Cost arm of
-the gate is pre-named in the dev doc, never "≤ its own cost". -->
+the gate is pre-named in the dev doc, never "≤ its own cost". SELF-CROSS RULE (2026-09-06, lane
+XR-PUB2): when the target is the head's OWN session, the shell command that pre-registers the
+controls is itself logged into that transcript, so freeze a /tmp copy of the transcript BEFORE
+writing the controls line and grant the copy alone (extraction and count both against the copy);
+a live-file grant voids the instrument check (known-issues 2026-09-06). REPORT CAP (2026-09-06):
+the wrapper counts every word, so spawn a reflector with `--report-words` raised to cover the table
+(the 800-word prose cap plus the table), or read the full text from the store. -->

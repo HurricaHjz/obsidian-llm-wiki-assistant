@@ -58,7 +58,9 @@ GRANTS
 DECISIONS: {{the run's decisions that bear on this task, and what sibling lanes hold | none}} — a decision the task needs and the brief lacks is a gap the lane reports, never a guess (A1).
 {{headless lanes: the read directories, the write scope and any add-on granted beyond the
 class row, each with its reason — so a refused path reads as a gap to report, never as a
-mistake to work around | in-session: "n/a — inherited"}}
+mistake to work around; every path and command literal, as the fence will see it — no `Let X =`
+shorthand and no pasteable placeholder, since a fenced lane copies a shorthand into a shell
+variable the fence reads as an ungranted root (eight denials, 2026-09-06) | in-session: "n/a — inherited"}}
 
 REGISTRIES
 {{propose-don't-write: return index/log entries as ready-to-apply diffs | ingest
@@ -81,7 +83,11 @@ LEDGER & CLAIMS <!-- parallel ingest runs only; delete this block for serial/one
   a per-source `checkpoint` at each stage you complete (`deduped → converted → read →
   compiled → claims_emitted → registered`), `conflict` events as found, `lane_close` last.
   Never read-modify-write the ledger; never write a `sorted` checkpoint (the head sorts at
-  merge); a failed append is reported, never retro-fixed by rewriting.
+  merge); a failed append is reported, never retro-fixed by rewriting. Folds must parse: a
+  count or a census over the ledger, or over any JSONL more than one writer appends to, reads
+  every line with `json.loads` or `jq` (one line at a time) before it counts; a key-pattern
+  grep is a locator, never a verdict, because two writers spell the same key differently
+  (`"lane": "L4"` beside `"lane":"L4"`) and a substring count read 5 of 8 (2026-09-01).
 - **Never create or edit shared-type pages** (entity/concept/model/benchmark). Emit claims
   instead — in your report, mirrored by the `claims_emitted` checkpoint: `{name · type ·
   kind: create|update · target (canonicalised against index.md — GPT-4o → update [[GPT]]) ·
@@ -95,6 +101,10 @@ VERIFICATION
 - Output gate: {{N}} source pages, each with §4.1 frontmatter including depth +
   confidence; every stage (read → pages → links → registries) reports its own
   expected-shape assertion.
+- Frontmatter `source_hash` is the first 16 hex chars of the raw file's sha256
+  (`shasum -a 256 <raw> | cut -c1-16`) — the length the ingest skill's de-dup pre-flight greps
+  (its Step 3 template); a prefix of any other length misses the probe on a re-add of the
+  same file (nine pages re-stamped, 2026-09-02).
 CONTROL+: {{a probe that must hit}} in {{the file that must hold it — a real path, nothing after it}}
 Negative control: {{fake pattern}} must be caught
 - Link-whitelist sweep with a planted fake link carries that negative control.

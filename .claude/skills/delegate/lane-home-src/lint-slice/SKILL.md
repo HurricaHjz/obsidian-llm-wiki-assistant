@@ -48,7 +48,9 @@ check whose input you cannot read is reported as `not run (grant missing)`, neve
 
 ## 1 — Index consistency (the one check that is not a script)
 
-Read `<vault>/wiki/index.md`; glob every `.md` under `<vault>/wiki/`, excluding `index.md` and
+Take the registered page names only — `grep -o '^- \[\[[^]|]*' <vault>/wiki/index.md | sed 's/^- \[\[//'`,
+about 18 kB against the file's 127 kB. Never read `index.md` whole for this: the check compares names, and
+its one-line descriptions are waste here. Glob every `.md` under `<vault>/wiki/`, excluding `index.md` and
 `log.md`. Report two lists: pages registered in the index but **missing on disk**, and pages on
 disk but **not registered**.
 

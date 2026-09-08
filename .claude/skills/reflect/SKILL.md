@@ -57,7 +57,9 @@ Collect candidates of four kinds. The first two matter most often; the last is t
 
 **Horizon, measured every run.** Earlier turns may have been compacted out of context, so measure the
 boundary against the on-disk session transcript instead of asserting it: `echo` a fresh nonce in shell,
-then grep for it under the harness transcript directory (Claude Code: `~/.claude/projects/<vault path,
+then grep for it **in a later call** under the harness transcript directory (the transcript records a
+call's result only after that call returns, so the same call cannot find its own nonce — the first
+probe of 2026-09-07 printed 0 for that reason and was re-run) (Claude Code: `~/.claude/projects/<vault path,
 separators as dashes>/*.jsonl`). The single file containing the nonce IS this session's record — the
 transcript logs the probe itself, which is the positive control (CLAUDE.md §11). A **negative** control here needs a needle the transcript has not already recorded: assemble it at runtime rather than typing the literal (a typed literal matches because the command logging it is part of the medium), or state the baseline count of self-hits. A control that fires against its own stated expectation is repaired, never narrated past (2026-09-03: one printed `exit=0` where it declared `1 = correctly none`, and the run continued). Count its human turns
 with a filter **verified against the visible span** (every visible human turn must be matched; beware:
@@ -125,7 +127,11 @@ A candidate survives only if all three hold:
    the claim. **Open every hit.** A `grep -l` answers "does this string occur", never "is this idea
    recorded", and the filename it returns often looks unrelated to the candidate — on 2026-09-03 a dedup
    hit was the one page already carrying the candidate's entire argument, and it went unopened, so the
-   candidate was proposed as novel. A hit that is not opened leaves the candidate *unresolved*, not clear. This is also what stops repeat runs re-proposing the same thing; there is no session
+   candidate was proposed as novel. A hit that is not opened leaves the candidate *unresolved*, not clear. **Stamp each dedup probe with the time it ran (2026-09-06):** a reflect run over a session that
+   edited the vault is checking a moving surface, and a candidate can be fixed by the same run that
+   raised it — in the N128 run two of four were, and the Step 5b critic spent its budget refuting
+   defects that no longer existed. The stamp is what lets a later reader tell a stale candidate from a
+   wrong one. This is also what stops repeat runs re-proposing the same thing; there is no session
    cursor, and none can be built (the log carries no clock). Check against the files on disk, never the copy of
    `CLAUDE.md` or `CUSTOMISATION.md` injected into your context: a helper agent's injected copy is the
    head's session-start snapshot, and on 2026-09-05 a reflector's copy lacked four edits made that day.
@@ -150,7 +156,10 @@ unwitnessed self-assessment has no witness and does not survive step 3.
 
 **Probe discipline (2026-08-27).** A dedup grep never carries an exclusion filter — one filtered out the
 very record that made a candidate redundant, manufacturing false novelty. And a probe's control is never
-the claim under test: pair every 0-hit with a positive control that hits on the same surface (§11).
+the claim under test: pair every 0-hit with a positive control that hits on the same surface (§11),
+phrased in the subject's own vocabulary — a path or name as the checked text spells it, never as the
+checker would spell it: a control in the checker's spelling read 0 of 4 on a live dual-name path
+(VER-130A, 2026-09-07) while the subject's spelling hit 4 of 4.
 
 ### Step 4 — Route it
 In priority order. Say which rule sent it there.
@@ -203,6 +212,15 @@ Discarded: 2 (already recorded ×1, no event behind it ×1)
 Proposed rules: 1 · always-on cost +180 bytes
 ```
 
+**The preview leads with the head's recommendation** (owner instruction 2026-09-06): one line per
+item — approve · strike · defer, each with its one-clause reason — printed before the approval
+question, so the owner can accept in a word; the recommendation is the head's, never the critic's,
+and it changes nothing about who approves. **The line is style-invariant** (owner ruling 2026-09-07:
+a style chooses the form of an obligation, never its presence): under `brief` and `shortest` it
+compresses to one clause per item (`1 approve — repeat`, `2 strike — already recorded`), never to a
+bare verdict in a column and never absent; a style's `Test:` bounds content, never an obligation's
+presence (CUSTOMISATION `## Output styles`). The Stop-hook check that logs its absence, warn-only,
+is recorded on `wiki/developments/per-reply-contract-enforcement.md` (`reflect-preview`).
 The owner approves per item ("1 and 3", "all but 2"). **Nothing is written without approval**, except
 under `--yes` below. One exception is a duty, not a licence: a defect the run itself finds is registered
 under CLAUDE.md §12 with the pass whatever else is approved, listed in the preview as `register (§12)` so
@@ -237,7 +255,10 @@ open recommends nothing — no forced next.
 a workflow-end proposal (the delegate skill §5 owns that policy: the head may propose once, cost
 declared first, never auto-run; the run's log entry records whether one was proposed — `proposed`
 or `not eligible`, 2026-08-30 — an accepted proposal being traced by the cross run's own entry). **Target:** a finished session's transcript, or the current
-session's transcript as of spawn — the live-write race is declared in the report; the pilot tested
+session's transcript as of spawn — the live-write race is declared in the report; for the current
+session (a self-cross run) the head freezes a `/tmp` copy of the transcript BEFORE it writes the run
+record's controls line and grants the copy alone, because the live file logs that very write and a
+live-file grant voids the instrument check (2026-09-06, lane XR-PUB2, known-issues); the pilot tested
 the finished case only (dated caveat: `wiki/developments/cross-reflection-pilot.md`).
 
 **Mechanism.** The head agent spawns a READ-ONLY reflector lane (delegate skill,

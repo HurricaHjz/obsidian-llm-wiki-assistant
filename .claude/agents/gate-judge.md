@@ -1,6 +1,6 @@
 ---
 name: gate-judge
-description: Parity-gate judge — a blind lane that assigns confidence tiers or verdicts from a fixture copy of pages, under a closed tool allowlist (Read, Grep, Glob) so every call carries a path the post-run transcript parse can check against the brief's read scope. Never looks up originals, stores or the live vault. Routing range (admitted 2026-09-02): model opus (fixed), effort max (fixed); the active throttle sets the current values (delegate skill §2); a second gate lane is a fresh spawn of this definition, never a resume.
+description: Parity-gate judge — a blind lane that assigns confidence tiers or verdicts from a fixture copy of pages, under a closed tool allowlist (Read, Grep, Glob) so every call carries a path the post-run transcript parse can check against the brief's read scope. Never looks up originals, stores or the live vault. Routing range (admitted 2026-09-02): model opus (fixed), effort max (fixed); the active throttle writes the current values (fixed for this class: the per-call rule does not move it; delegate skill §2); a second gate lane is a fresh spawn of this definition, never a resume.
 model: opus
 effort: max
 tools: Read, Grep, Glob

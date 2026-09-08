@@ -13,19 +13,50 @@ routine lint.
 Usage (run from the vault root):
   python3 .claude/skills/lint/apply-palette.py --check   # report missing groups; exit 1 if any, else 0. No write.
   python3 .claude/skills/lint/apply-palette.py --apply   # add missing groups, write graph.json (default).
-Optional final arg: vault root (defaults to the current directory).
+Optional final arg (or --vault ROOT): vault root (defaults to the current directory). A root
+that is not a vault (no raw/ + wiki/) is refused: PROBE FAILED on stderr, exit 2 — this is the
+one script here that writes, so a wrong tree would be written into, not merely scanned.
 """
 import json
 import os
 import sys
 
+USAGE = "usage: apply-palette.py [--check|--apply] [--vault ROOT] [ROOT]"
+
 mode = "--apply"
-root = "."
-for a in sys.argv[1:]:
+root = None
+args = list(sys.argv[1:])
+while args:
+    a = args.pop(0)
     if a in ("--check", "--apply"):
         mode = a
-    else:
-        root = a
+        continue
+    if a in ("-h", "--help"):
+        print(USAGE)
+        sys.exit(0)
+    if a == "--vault":
+        if not args:
+            print("PROBE FAILED: --vault needs a directory argument", file=sys.stderr)
+            sys.exit(2)
+        a = args.pop(0)
+    elif a.startswith("--vault="):
+        a = a.split("=", 1)[1]
+    elif a.startswith("-"):
+        # An unknown flag used to be taken as the vault root, so a typo pointed the write at a
+        # directory named "--dry-run" instead of stopping (known-issues 2026-09-06).
+        print(f"PROBE FAILED: unknown option {a} ({USAGE})", file=sys.stderr)
+        sys.exit(2)
+    if root is not None:
+        print(f"PROBE FAILED: two roots given ({root} and {a})", file=sys.stderr)
+        sys.exit(2)
+    root = a
+root = root if root else "."
+
+# The 2026-08-26 standard: a root must hold raw/ AND wiki/ or the run refuses — fail loud,
+# never a wrong-tree read (and here, never a wrong-tree write).
+if not all(os.path.isdir(os.path.join(root, d)) for d in ("raw", "wiki")):
+    print(f"PROBE FAILED: {root} is not a vault root (no raw/ or wiki/)", file=sys.stderr)
+    sys.exit(2)
 
 palette_path = os.path.join(root, ".claude", "skills", "lint", "palette.json")
 graph_path = os.path.join(root, ".obsidian", "graph.json")

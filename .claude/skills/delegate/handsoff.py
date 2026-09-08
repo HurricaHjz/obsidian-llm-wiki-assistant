@@ -8,37 +8,54 @@ Design: wiki/developments/hands-off-mode-design.md (D4, D5, D13, D21, the trace 
 schema, the context bands, the account plan) plus the critic amendments in the builder brief.
 
 Subcommands
-  run-open     record the run's opening: session, head, regime, hand-off path, envelope, pid;
-               writes the grants file and the state directory's run-<sid> pointer (D34)
+  run-open     record the run's opening: session, head, regime, hand-off path, envelope, pid,
+               and --session-kind seed|head written as `session_kind` (default head; seed marks
+               a launcher's placeholder session, which no reader counts as a head that ran);
+               writes the grants file and the state directory's run-<sid> pointer (D34), and
+               opens the console window unless --viewer none (the console window below)
   run-resume   a later head (a successor, or a pasted resume prompt) records itself likewise,
                and writes the same two files
   boundary     meter, compute the five waste fields, measure the head's context, append the
                phase-boundary event, add the trace row, refresh the morning report's figures,
                checkpoint-commit (--commit MSG)
-  ledger       one row in the hand-off's findings ledger plus an observation event
-  gate         band check before an item: a gate event; exit 4 when armed at or above the
-               second edge (stop-condition band); the unmetered policy below; the first gate
+  ledger       one row in the hand-off's findings ledger plus an observation event;
+               `--observation "<what>"` instead appends the observation alone, with no ledger
+               row, to any record that exists (the plain-lane-run shape below)
+  gate         band and envelope check before an item: a gate event; exit 4 when armed at or
+               above the second edge (stop-condition band); exit 5 with stop-condition
+               `which: envelope` when the run's spend has reached run-open's envelope_usd
+               (the envelope policy below); the unmetered policy below; the first gate
                of a session records the orientation cost (D41), null after a resume — a
                head-resumed event, or a run-resume naming the session of the head event before
                it WHEN that session already gated, either of which leaves the whole session in
                the transcript's first call (a successor's own first gate stays measured)
   handoff      rewrite named sections or morning-report bullets, atomically; --final records
-               head-exit with --band and requires the next-task pack (D41). --inflight and
+               head-exit with --band and requires the next-task pack (D41), and prints the pid
+               it wrote and why (pid discovery below). --inflight and
                --inflight-file stamp the pack with its age; --inflight-from-record re-derives
                `## In flight` from the run record (the pack-age guard below)
-  successor    called BY the exiting head: records head-exit when missing, then starts a
+  successor    called BY the exiting head: sizes the cap from the envelope minus recorded spend
+               when the record's last head-exit is a seed exit (`budget_src: envelope (seed)`,
+               register entry 2026-09-07, since a seed session has no transcript to meter);
+               records head-exit when missing, then starts a
                DETACHED starter that waits for the predecessor to die, starts the successor
                head (claude -p, the resume prompt on standard input) and stays as its
                supervisor (D30); returns at once
   supervise    attach the same supervisor to a head already running (the head calls it about
                itself); detaches at once and returns one line
+  resume-head  after a limit the run stood down on (D42): resume the record's last head in
+               place, armed, evented and supervised (the owner's command after the reset);
+               detaches at once
+  watch        the read-only console for a run: header, items, lanes, timeline, feed; `q` quits
+               and `r` resumes a stopped head. Writes only the timeline report, at the close
   heartbeat    an attended head's idle-cache beat (D32): a background call that returns after
                --minutes with one line, so the harness's re-invocation refreshes the cache;
                never for a -p head, which has no idle state
   wait-reset   the supervisor's reset wait as a command, kept for --dry-run parser checks and
                for a hand-run wait; no longer a head-side blocking call (D28). It sleeps to the
                reset time the stop text names and sends no probe unless --probe is passed
-  close        final meter, run-close, the heartbeat stop marker, commit and push on grant
+  close        final meter, run-close, the heartbeat stop marker, commit and push on grant; on a
+               plain record (below) the run-close is written from the lane events alone
   waste-table  Step 2b's usage-and-waste table rendered from the run record alone (D36)
   extract-transcript
                the head's own transcript extracted for a reflector lane (D36)
@@ -46,12 +63,36 @@ Subcommands
                that reflector lane's whole input set in one directory: the extraction, the
                waste table and a filtered copy of the run record (D36)
 
+The plain-lane-run shape. A record opened by the lane wrapper alone carries lane events and no
+`run-open`: an attended session spawned lanes, so there is no hands-off run, no head session on
+the record, no envelope and no hand-off document. Three primitives accept it, and the test is
+always the record's own events, never the run's name. `ledger --observation "<what>"` appends one
+observation and no ledger row; the plain `ledger` still refuses (no hand-off to write a row in)
+and its refusal names `--observation`. `close` writes a `run-close` carrying `shape:
+"plain-lane-run"`, the lanes counted by exit class and the spend summed from the `lane-closed`
+events' own costs, with no head meter, no hand-off rewrite and no hand-off row; `--commit` and
+`--push` are refused there (exit 2, nothing written), since neither has a head's grant behind it.
+`watch --run` renders the lanes, the timeline and the feed with no items panel. Every other
+primitive needs the head a `run-open` names and refuses as before.
+
 The boundary reflection (D36). At a hands-off boundary the head reflects in a lane rather than
 in its own context, and two primitives feed that lane. `waste-table --run R` renders the reflect
-skill's Step 2b table from `<store>/spawn-records/<run>.jsonl` and nothing else — no meter call,
-no recalled figure: one row per waste field per phase-boundary event (each naming its event by
-from → to and timestamp), the billed line at every boundary with the run total as a shown sum of
-the session figures, context per item as the delta between consecutive gate events, the
+skill's Step 2b table from `<store>/spawn-records/<run>.jsonl` — no recalled figure, and the one
+meter call is the whole-run rows' own (T6 of the token-efficiency findings, 2026-09-07: each head
+metered over the RUN's window, run-open to run-close or to the record's last event, by the
+meter's `--start`/`--end`, so a session shared with attended work is never counted whole against
+one run; `--no-meter` renders from the record alone and `--meter-line SID=LINE` stands in for one
+head). Where that meter gives no figure a head's row falls back to the LATER of its last boundary
+billed line and its `head-exit.spent_usd`, so a head that exited without a boundary loses no
+spend, and the envelope base is printed beside the total (register entry 2026-09-06). Head
+sessions are counted by distinct session id, a session `run-open --session-kind seed` marks is
+skipped as a launcher's placeholder and named once in the header's `seed (skipped)` line (T7),
+and a recorded limit wait (stop-condition to head-resumed) takes a structural row of its own. The
+rest is read from fields: one row per waste field per phase-boundary event (each naming its event
+by from → to and timestamp) — the over-cap row carrying the CUT TAIL alone, the words above the
+800-word cap at 1.3 tokens per word (judgement, unmeasured) and the lane's model's output rate
+from prices.json, never the lane's whole cost (T8) — the billed line at every boundary, context
+per item as the delta between consecutive gate events, the
 orientation cost per head from the first gate's `orientation_tokens` (D41), and the lost-lane
 cost of every lane-closed whose exit class is not `completed`. A field the event does not carry
 is `field absent`, never 0; a field that is there and null is `unmeasured`; every figure carries
@@ -61,10 +102,18 @@ which is the zero-findings control. A record with no phase-boundary events still
 gate, orientation and lane rows and says `no phase-boundary events`; no record at all is a
 premise failure. Output goes to --out (default `<store>/spawn-records/<run>-waste-table.md`) and
 one line to stdout; --dry-run prints the counts and writes nothing.
-`extract-transcript --session SID` writes `turns.md` (the human turns and the assistant prose,
-each headed `## turn N · role · timestamp`) and `counts.json` (the `read k of N` figure the
-reflector verifies) under --out (default `/tmp/aimyth-extract-<sid>/`). Tool-result records and
-the two injected user-record classes the reflector template names are excluded and counted;
+`extract-transcript --session SID` writes `turns.md` (the human turns, the assistant prose and
+the assistant's tool CALLS, each headed `## turn N · role · timestamp`) and `counts.json` (the
+`read k of N` figure the reflector verifies) under --out (default `/tmp/aimyth-extract-<sid>/`).
+An assistant record holding only tool calls is a tool-call turn headed `assistant · tool calls`:
+one line per call with the tool's name and the input field naming what it acted on (Bash
+`command`, Read/Edit/Write `file_path`, Grep/Glob `pattern`, any other tool its name alone), each
+cut at 300 characters; a record holding both prose and calls keeps its prose turn and the lines
+go under it. Those records were dropped before (register entry 2026-09-07: the reflector saw the
+head's progress prose and nothing of what it did); they are now counted under `tool_call_turns`,
+so records = extracted + tool_call_turns + every exclusion. Tool RESULTS are never carried:
+tool-result records and the two injected user-record classes the reflector template names are
+excluded and counted;
 `"type":"user"` alone does not mean a human turn. The transcript is found as the gate finds it
 (--projects-root overrides the root), the block reader is lane.py's own, and an unparseable line
 is counted under `excluded.unparseable` rather than being fatal. Two harness shapes are handled
@@ -103,9 +152,16 @@ duplicate guard refuses when a head-successor appears meanwhile). Every head-exi
 `spent_usd`, the session's billed total metered once at exit, and the remainder any next head
 is sized at is the envelope minus every head-exit's spent_usd minus the current session's
 total — the envelope is never re-granted per head.
-`limit` waits: the explicit --reset-at first, else the reset parsed from the stop text; the
+`limit` is decided by the run's limit gate — the grants file's `on_limit` (design D42, the
+pre-flight's class L): `stop`, the default, stands the supervisor down at once (event
+supervisor-stood-down reason limit-stop, exit 0, the hand-off the recovery — the designed
+default, never an abort); `resume` (the pre-flight's limit-off) waits: the explicit --reset-at first, else the reset parsed from the stop text; the
 sleep runs in SUPERVISE_TICK_S ticks so a run-close written meanwhile ends it, and --max-wait-s
-bounds it (successor-aborted, reason reset-timeout). THE PROBE IS OPT-IN AND OFF BY DEFAULT
+bounds it (successor-aborted, reason reset-timeout). During that wait, and as the last act
+before a resume or a successor start, the supervisor stands down when the head transcript
+changed (someone continued the session by hand: reason resumed-by-hand) or the marker
+<run>-supervisor.stop appeared (`supervise --stop`, or `close`; reason stopped) — design D43,
+keyed on the observable, the baseline taken after the stop is classified. THE PROBE IS OPT-IN AND OFF BY DEFAULT
 (owner ruling 2026-09-06, CLAUDE.md §11: no agent probes or adjusts to an account limit without
 explicit approval): with --probe, and only then, a haiku probe under the same login every
 PROBE_INTERVAL_S ends the wait on the first success; the supervisor never passes --probe on its
@@ -148,6 +204,17 @@ starter refuses (successor-aborted, reason unmetered-loop) when the previous hea
 carried band unmetered, so an unmetered fault buys at most one restart. Unarmed, the second
 miss is a warning line and exit 0 (soft bands never stop a run, D2); the observation stands.
 
+The gate's envelope policy (register entry 2026-09-07: an envelope stated in the pre-flight and
+measured nowhere cannot stop anything). Every gate computes the run's spend against run-open's
+`envelope_usd` through `envelope_left` — every head-exit's spent_usd plus this session's billed
+total, metered now or taken from `--meter-line` — and prints it on its line as `envelope: $<spent>
+of $<envelope>, remainder $<r>`. A remainder at or below zero refuses the item, armed or not,
+with a stop-condition event — `{"event": "stop-condition", "which": "envelope", "lane":
+"head", "action": …, "note": <the figures>}` — and exit 5: the run stops there, and the owner
+tops the envelope up before any successor (which refuses on the same figure). A record whose run-open carries no envelope prints `envelope: none` and allows; a
+meter that gives no session total prints `envelope: unmeasured (<reason>)` and allows, never a
+refusal. A warning threshold stays the head's rule: the gate writes no warning event.
+
 Armed: AIMYTH_HANDSOFF=1 in the environment, or the marker file armed-<sid> in AIMYTH_STATE_DIR
 (default ~/.aimyth/handoffs; the hooks' handsoff-gate.py convention). Bands: AIMYTH_BANDS
 (two or three ascending edges; the second is the gate's threshold) and AIMYTH_CONTEXT_WINDOW,
@@ -164,6 +231,21 @@ nearest ancestor whose command is the harness binary → pid, pid_src parent-wal
 attended head) → no pid, pid_src none, and the starter falls back to 120 s of transcript
 silence; --pid N overrides with pid_src arg.
 
+The seed pattern (register entry 2026-09-07). A launcher shell that opens a run for a head which
+has not started yet passes ITS OWN pid, `--pid $$`, to `run-open --session-kind seed`, to
+`handoff --final` and to `successor`: the launcher is not the head, so a parent walk from any of
+those calls reaches the live attended session instead, and the first starter then waits on the
+launcher itself (register entry 2026-09-07: one lost starter at a 01:00 BST launch, no head
+cost). Where
+`handoff --final` is called without --pid on a SEEDED record — the record's run-open marks
+`session_kind: seed` — the seed's own recorded pid is taken from that run-open event and the
+walk is not run; the command prints the pid and its source on one line (`handoff: pid <n>
+(run-open, seed)`), and on a head record the line reads `(parent-walk)`, `(arg)` or `(none)` as
+before. `successor` inherits the fix through a head-exit the record already holds, and from
+2026-09-08 resolves the pid by that same rule — the same helper — for the first head-exit it
+writes itself, printing `successor: pid <n> (run-open, seed)` on the same shape of line
+(register entry 2026-09-08).
+
 The grants file (D34): run-open and run-resume write <store>/spawn-records/<run>-grants.json
 (--grants-file PATH overrides) with `grants` and `writes` as real paths — every path given is
 expanded, made absolute and resolved, and kept in both spellings when the given and the real
@@ -173,6 +255,31 @@ carry the store root and the state directory. The same two commands write the po
 run-<sid> (one line, the run id) under the state directory, so the head fence finds the run
 from a session id when AIMYTH_HANDSOFF_RUN is absent. gate and boundary print one warning
 line when the session is armed and the grants file is missing: the head fence is fail-open.
+
+The console window (IDEAS №139 A2, the window on the A1 console). The grants file carries a
+second key beside `on_limit` and built the same way: `viewer`, either `terminal` (the default,
+and what a file without the key reads) or `none`. `run-open --viewer terminal|none` sets it,
+`grants --viewer` rewrites it, `grants --grant PATH` and a flag-less `run-resume` carry it
+forward, and run-open records it on its event as `viewer` with `viewer_src` (arg, grants, or
+default (key absent)). The grants file is the key's only home: no second file and no environment
+fallback for the key itself. On `terminal`, `open_console(run)` writes
+<store>/spawn-records/<run>-console.command (mode 0755, `exec <this interpreter> -B <this
+script> watch --run R`, rewritten when stale) and opens it in a Terminal window — osascript
+first (`do script` on the file path, passed as an argv item and never interpolated into the
+script text, the window titled `aiMyth hands-off · <run>`), then `open -a Terminal <path>`,
+which needs no Automation permission. AIMYTH_VIEWER_CMD, when set, REPLACES the whole opener:
+it is split with shlex, the command file's path is appended as its last argument and it is run
+in list form, never through a shell. A VIEWER FAILURE NEVER FAILS A LAUNCH: every failure — no
+binary, a timeout, a non-zero exit — prints one line to standard error (`viewer: no Terminal
+window (<why>); run by hand: python3 -B <this script> watch --run R`) and the calling primitive
+still exits 0. run-open opens at once, since a run's first act can have no console yet;
+`successor`, `resume-head` and the supervisor's own successor and in-place-resume starts open
+one only when `console_alive(run)` finds none, so the owner's `q` gets a fresh window while a
+running console is never doubled. That probe is `pgrep -f` on both spellings of the command —
+`handsoff.py watch --run R` as it is launched and `watch.py --run R` as it runs, since `watch`
+execs watch.py in place — the run id escaped and the pattern passed as an argv item, so it never
+matches its own command line. Away runs are included: the key alone decides. Every --dry-run
+prints the opener's command line, opens nothing and writes no command file.
 
 Paths for a staged copy: AIMYTH_HOOKS_DIR names the hooks directory holding
 context-watermark.py (default two levels up from this script, beside the skill tree) and
@@ -200,7 +307,8 @@ the hand-off not refreshed (a section is missing: fix the document) · 4 gate re
 band (armed) · 7 gate refused on the second unmetered miss (armed), or wait-reset gave up at
 --max-wait-s, or wait-reset ended limit-unparsed (no reset time, no --probe: the hand-off is
 the recovery) · 8 wait-reset still running (re-issue the call) · 1 from an internal supervisor
-whose run ended in successor-aborted.
+whose run ended in successor-aborted (a stand-down, supervisor-stood-down, exits 0: the
+designed default, never an abort).
 
 Numbers: report cap 800 words (delegate skill, lane core); starter wait 600 s and silence
 proxy 120 s (design, context bands; set by judgement, unmeasured); --max-block-s 540 s (the
@@ -211,7 +319,9 @@ the supervisor's sleep tick 60 s (set by judgement, unmeasured: a run-close is s
 minute and the tick costs nothing); the resume edge is the first band edge, 60 % by default
 (design D30: the first band, unmeasured as an optimum); heartbeat 50 min (the 1-hour cache
 tier less 10 min for the re-invocation's latency, set by judgement, design D32) in 30 s ticks
-(design D32); the stop-condition note is cut at 300 characters (the waiter's existing cut).
+(design D32); the stop-condition note is cut at 300 characters (the waiter's existing cut); the
+viewer's timeout 10 s (the console page's osascript notification bound is 5 s, doubled because
+`do script` starts a process rather than posting a banner: set by judgement, unmeasured).
 Every --dry-run prints what would be written and writes nothing.
 """
 import sys
@@ -224,6 +334,7 @@ import json
 import math
 import os
 import re
+import shlex
 import subprocess
 import time
 import uuid
@@ -232,6 +343,12 @@ HEAD_EVENTS = ("run-open", "run-resume", "head-exit", "head-successor")
 SESSION_EVENTS = ("run-open", "run-resume", "head-successor")   # each names the head's session
 START_EVENTS = SESSION_EVENTS + ("head-resumed",)   # each starts a head process the supervisor owns
 WRAPPER_EVENTS = ("lane-closed", "stall")   # written while the head waits, never by the head
+SESSION_KINDS = ("seed", "head")   # run-open --session-kind: a launcher's placeholder, or a head
+# The cut tail of an over-cap report, priced in the waste table (T8 of the token-efficiency
+# findings of 2026-09-07): words above REPORT_CAP_WORDS, converted at this many tokens per word
+# and charged at the lane's model's OUTPUT rate from prices.json. The ratio is set by judgement,
+# unmeasured — no tokeniser is read here — and every row it prices says so.
+WORDS_TO_TOKENS = 1.3
 DEFAULT_EDGES = (60, 80, 90)                # fallback only; the watermark hook's bands() decides
 DEFAULT_WINDOW = 1000000
 REPORT_CAP_WORDS = 800
@@ -248,7 +365,25 @@ SUPERVISE_TICK_S = 60          # the supervisor's sleep tick (set by judgement, 
 RESUME_CAP = 2                 # resumes per head session (critic C2 N6, set by judgement)
 HEARTBEAT_MINUTES = 50.0       # the 1-hour cache tier less 10 min latency (design D32, judgement)
 HEARTBEAT_TICK_S = 30          # design D32
+ON_LIMIT_VALUES = ("stop", "resume")   # the limit gate (design D42): the pre-flight's class L
+ON_LIMIT_DEFAULT = "stop"              # respect the limit; `resume` is the pre-flight's limit-off
+VIEWER_VALUES = ("terminal", "none")   # the viewer key: a Terminal window on the run's console
+VIEWER_DEFAULT = "terminal"            # a run the owner can see; `none` is the opt-out
+VIEWER_TIMEOUT_S = 10          # the opener's bound (the console page's osascript 5 s, doubled
+                               # because `do script` starts a process: set by judgement)
+CONSOLE_TITLE = "aiMyth hands-off · %s"   # the console window's custom title, per run
+CONSOLE_START_GRACE_S = 15     # a console opened this recently counts as alive before its process
+                               # shows in the table: Terminal opens the window and starts the
+                               # .command's shell a few seconds after the opener returns, and
+                               # run-open then successor one second apart opened two windows
+                               # (the №140 launch, 12:16 BST 2026-09-08). Bounds only: 15 s is
+                               # an order of magnitude over that race and under any head's first
+                               # turn; set by judgement, the race measured once
 NOTE_CUT = 300                 # the stop-condition note's cut (the waiter's existing cut)
+# The gate's envelope stop (register entry 2026-09-07): 5 is the lowest exit code no subcommand
+# uses — 0 done, 1 a supervisor or starter failure, 2 a premise failure, 3 boundary's hand-off
+# not refreshed, 4 the band stop, 7 unmetered or limit, 8 still-running, 124/127 the shell's.
+EXIT_ENVELOPE = 5
 PACK_LABELS = ("Next:", "Needs:", "Decided:")   # the next-task pack (design D41)
 PACK_LINE_RE = re.compile(r"^\s*(?:[-*]\s+)?(Next|Needs|Decided):", re.M)
 PACK_STAMP = "- pack written: "                 # the pack's age stamp (the pack-age guard)
@@ -357,9 +492,11 @@ def grants_path(run, override=None):
     return os.path.join(store_root(), "spawn-records", token(run, "run id") + "-grants.json")
 
 
-def grants_payload(run, source, grants, writes):
+def grants_payload(run, source, grants, writes, on_limit=ON_LIMIT_DEFAULT,
+                   viewer=VIEWER_DEFAULT):
     """The defaults first (critic C1 F2: the head's own primitives are never denied), then the
-    paths given, every one in both spellings, de-duplicated in order."""
+    paths given, every one in both spellings, de-duplicated in order; `on_limit` is the limit
+    gate (D42) and `viewer` the console window's key, each carried by this file alone."""
     def merge(paths):
         out = []
         for p in paths:
@@ -371,13 +508,78 @@ def grants_payload(run, source, grants, writes):
             "grants": merge([vault_given(), store_given(), state_dir(), projects_given(),
                              lane_home_given(), "/tmp"] + list(grants or [])),
             "writes": merge([store_given(), state_dir()] + list(writes or [])),
-            "written": now(), "source": source}
+            "on_limit": on_limit, "viewer": viewer, "written": now(), "source": source}
+
+
+def read_grants(path):
+    """The grants file's payload, or {} when absent or unreadable (a missing file is the fence's
+    fail-open case and the gate's default, never an error here)."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def on_limit_of(payload):
+    """(value, source) from a grants payload: the key when it holds a known value, else the
+    default `stop` with the reason (D42: a file written before the gate existed reads stop)."""
+    value = payload.get("on_limit") if isinstance(payload, dict) else None
+    if value in ON_LIMIT_VALUES:
+        return value, "grants"
+    if not payload:
+        return ON_LIMIT_DEFAULT, "default (no grants file)"
+    if value is None:
+        return ON_LIMIT_DEFAULT, "default (key absent)"
+    return ON_LIMIT_DEFAULT, "default (unknown value %r)" % (value,)
+
+
+def on_limit_choice(a, path):
+    """(value, source) the next write of the grants file carries: --on-limit when given, else
+    the file's own value carried forward (D42; critic C1 M5: a rebuild must not reset it), else
+    the default."""
+    chosen = getattr(a, "on_limit", None)
+    if chosen in ON_LIMIT_VALUES:
+        return chosen, "--on-limit"
+    return on_limit_of(read_grants(path))
+
+
+def viewer_of(payload):
+    """(value, source) from a grants payload, as on_limit_of reads the limit gate: the key when
+    it holds a known value, else the default `terminal` with the reason. A grants file written
+    before the viewer existed reads `terminal`, so an old run still gets its window."""
+    value = payload.get("viewer") if isinstance(payload, dict) else None
+    if value in VIEWER_VALUES:
+        return value, "grants"
+    if not payload:
+        return VIEWER_DEFAULT, "default (no grants file)"
+    if value is None:
+        return VIEWER_DEFAULT, "default (key absent)"
+    return VIEWER_DEFAULT, "default (unknown value %r)" % (value,)
+
+
+def viewer_choice(a, path):
+    """(value, source) the next write of the grants file carries: --viewer when given, else the
+    file's own value carried forward (a rebuild must not reset it, as for the limit gate), else
+    the default. The grants file is this key's only home (D42's rule for on_limit): no second
+    file and no environment fallback for the key itself."""
+    chosen = getattr(a, "viewer", None)
+    if chosen in VIEWER_VALUES:
+        return chosen, "arg"
+    return viewer_of(read_grants(path))
 
 
 def write_grants(run, source, a):
     path = grants_path(run, a.grants_file)
+    on_limit, _ = on_limit_choice(a, path)
+    viewer, _ = viewer_choice(a, path)
+    if on_limit == "resume" and path != grants_path(run):
+        die("--on-limit resume needs the default grants path %s: the supervisor and the status "
+            "hook read no other (D42), and --grants-file names %s" % (grants_path(run), path))
     try:
-        write_atomic(path, json.dumps(grants_payload(run, source, a.grant, a.write),
+        write_atomic(path, json.dumps(grants_payload(run, source, a.grant, a.write, on_limit,
+                                                     viewer),
                                       ensure_ascii=False, indent=1) + "\n")
     except OSError as exc:
         die("cannot write the grants file %s: %s" % (path, exc))
@@ -507,14 +709,35 @@ def read_record(path):
     return events, bad
 
 
-def require_record(path):
+PLAIN_SHAPE = "plain-lane-run"   # the `shape` a plain record's run-close carries (see close_plain)
+
+
+def read_existing_record(path):
+    """The record's events with NO `run-open` requirement: the file must exist and parse.
+
+    A record `lane.py` opened holds lane events and no `run-open` — the plain-lane-run shape of
+    the register entries of 2026-09-06 and 2026-09-07. The guard on `run-open` belongs to the
+    caller that needs a head (a boundary, a gate, a hand-off rewrite), never to the reader."""
     if not os.path.isfile(path):
         die("no run record at %s — run-open first" % path)
     events, bad = read_record(path)
     if bad:
         note("%d unparseable line(s) in %s skipped" % (bad, path))
-    if last_index(events, ("run-open",)) < 0:
-        die("no run-open event in %s" % path)
+    return events
+
+
+def is_plain_run(events):
+    """True for the plain-lane-run shape: a record with no `run-open` event. The test is the
+    record's own events, never the run's name or the store it sits in."""
+    return last_index(events, ("run-open",)) < 0
+
+
+def require_record(path, hint=""):
+    """The events of a record that must carry a `run-open`; `hint` names the form that works on
+    a record without one, for the commands that have such a form."""
+    events = read_existing_record(path)
+    if is_plain_run(events):
+        die("no run-open event in %s%s" % (path, hint))
     return events
 
 
@@ -850,6 +1073,241 @@ def pid_alive(pid):
     return True
 
 
+# ------------------------------------------------------------------ the console window -----
+
+def console_command_path(run):
+    """The run's opener script, beside its record in the run store (never a temp path, so a
+    stale one is found and rewritten rather than accumulating)."""
+    return os.path.join(store_root(), "spawn-records",
+                        token(run, "run id") + "-console.command")
+
+
+def console_command_text(run):
+    """The opener script's whole content: this interpreter, this script, `watch --run R`. Every
+    path is derived — sys.executable and this file's own absolute path — so the shipped source
+    carries none of them as a literal."""
+    return ("#!/bin/sh\nexec %s -B %s watch --run %s\n"
+            % (shlex.quote(sys.executable), shlex.quote(os.path.abspath(__file__)),
+               shlex.quote(token(run, "run id"))))
+
+
+def write_console_command(run):
+    """The opener script written 0755, rewritten when stale (the interpreter or this file moved,
+    or the run store was rebuilt): the path, or None with a note when it cannot be written."""
+    path = console_command_path(run)
+    text = console_command_text(run)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        current = None
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                current = handle.read()
+        if current != text:
+            write_atomic(path, text)
+        os.chmod(path, 0o755)
+    except OSError as exc:
+        note("viewer: cannot write the console command %s: %s" % (path, exc))
+        return None
+    return path
+
+
+def console_alive(run):
+    """The pids of the processes already showing this run's console. Two spellings count: the
+    command as it is launched (`handsoff.py watch --run R`) and the command as it RUNS, since
+    `watch` execs watch.py in place and the live process reads `… /watch.py --run R` (checked
+    against a live console on 2026-09-08). A pattern on the first spelling alone finds nothing.
+    The run id is escaped and the pattern is passed as an argv item to `pgrep`, never through a
+    shell, so this probe never matches its own command line."""
+    rid = re.escape(token(run, "run id"))
+    pattern = r"(handsoff\.py watch|watch\.py) --run %s([[:space:]]|$)" % rid
+    try:
+        proc = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True,
+                              timeout=VIEWER_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        note("viewer: cannot probe for a live console (%s: %s)" % (type(exc).__name__, exc))
+        return []
+    pids = []
+    for field in proc.stdout.split():
+        try:
+            pid = int(field)
+        except ValueError:
+            continue
+        if pid != os.getpid():
+            pids.append(pid)
+    return pids
+
+
+def console_starting(run):
+    """The age in seconds of a console opened within CONSOLE_START_GRACE_S, else None: the
+    opener sets the command file's mtime at every open (mark_console_opening) and pushes it into
+    the past on a failed open (mark_console_failed), so a fresh mtime means a window Terminal is
+    still bringing up, whose process console_alive cannot see yet (the race of 2026-09-08). A
+    missing file, an old file or an unreadable mtime is None: no claim."""
+    path = console_command_path(run)
+    try:
+        age = time.time() - os.path.getmtime(path)
+    except OSError:
+        return None
+    return age if 0 <= age < CONSOLE_START_GRACE_S else None
+
+
+def mark_console_opening(path):
+    """Stamp the command file with the clock just before the opener runs, whatever its content
+    (write_console_command rewrites only stale content, so the stamp is explicit)."""
+    try:
+        os.utime(path, None)
+    except OSError as exc:
+        note("viewer: cannot stamp the console command %s: %s" % (path, exc))
+
+
+def mark_console_failed(path):
+    """Push the command file's mtime past the grace window after a failed open, so the failure
+    never reads as a console still starting."""
+    past = time.time() - 2 * CONSOLE_START_GRACE_S
+    try:
+        os.utime(path, (past, past))
+    except OSError as exc:
+        note("viewer: cannot unstamp the console command %s: %s" % (path, exc))
+
+
+def viewer_argv(path, run):
+    """(argv, fallback argv) for the opener. AIMYTH_VIEWER_CMD, when set, REPLACES the whole
+    opener command: it is split with shlex, the command file's path is appended as the last
+    argument, and it is run in list form — never a shell string, so no word of it is re-parsed
+    by a shell. Otherwise the pair is osascript (a Terminal window with a custom title) and,
+    on any failure, `open -a Terminal <path>`, which needs no Automation permission."""
+    custom = os.environ.get("AIMYTH_VIEWER_CMD")
+    if custom:
+        return shlex.split(custom) + [path], None
+    script = ["on run argv",
+              "tell application \"Terminal\"",
+              "activate",
+              "do script (item 1 of argv)",
+              "try",
+              "set custom title of window 1 to (item 2 of argv)",
+              "end try",
+              "end tell",
+              "end run"]
+    argv = ["osascript"]
+    for line in script:
+        argv += ["-e", line]
+    argv += [path, CONSOLE_TITLE % token(run, "run id")]
+    return argv, ["open", "-a", "Terminal", path]
+
+
+def run_viewer(argv):
+    """(True, "") when the command exits 0, else (False, why). Never raises and never fails a
+    caller: a missing binary, a timeout and a non-zero exit are all one class."""
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=VIEWER_TIMEOUT_S)
+    except FileNotFoundError:
+        return False, "%s not on PATH" % argv[0]
+    except subprocess.TimeoutExpired:
+        return False, "%s timed out after %d s" % (argv[0], VIEWER_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, "%s: %s" % (argv[0], exc)
+    if proc.returncode == 0:
+        return True, ""
+    tail = (proc.stderr or proc.stdout or "").strip().replace("\n", " ")[:120]
+    return False, "%s exit %d%s" % (argv[0], proc.returncode, ": " + tail if tail else "")
+
+
+def run_viewer_key(run):
+    """(value, source): the run's viewer key from the DEFAULT grants path — the one file the
+    head fence and the status hook read too, and the key's only home (as `on_limit`, D42). A
+    missing file or key is the default `terminal`, and the source says which."""
+    return viewer_of(read_grants(grants_path(run)))
+
+
+def by_hand_line(run):
+    """The line the owner runs when no window could be opened; the same derived paths."""
+    return "python3 -B %s watch --run %s" % (os.path.abspath(__file__), token(run, "run id"))
+
+
+def open_console(run, viewer=None, dry_run=False, why=""):
+    """Put a Terminal window on this run's console (`handsoff.py watch --run R`), the window
+    part A2 of the console (IDEAS №139). Returns True when a window was opened.
+
+    A VIEWER FAILURE NEVER FAILS A LAUNCH: every path here ends in one stderr line naming the
+    reason and the by-hand command, and the calling primitive still exits 0. `viewer: none`
+    opens nothing; --dry-run prints the command line, opens nothing and writes no file."""
+    if viewer is None:
+        viewer, _ = run_viewer_key(run)
+    if viewer != "terminal":
+        say("viewer: none (grants) · no window%s" % (" · " + why if why else ""))
+        return False
+    path = console_command_path(run)
+    argv, fallback = viewer_argv(path, run)
+    if dry_run:
+        say("viewer: dry run · command file %s (not written) · would run: %s%s"
+            % (path, " ".join(shlex.quote(w) for w in argv),
+               " · fallback: " + " ".join(shlex.quote(w) for w in fallback)
+               if fallback else " · fallback: none (AIMYTH_VIEWER_CMD)"))
+        return False
+    written = write_console_command(run)
+    if written is None:
+        note("viewer: no Terminal window (the console command could not be written); run by "
+             "hand: %s" % by_hand_line(run))
+        return False
+    mark_console_opening(path)
+    ok, first_why = run_viewer(argv)
+    if not ok and fallback is not None:
+        ok, second_why = run_viewer(fallback)
+        first_why = "%s; %s" % (first_why, second_why) if not ok else first_why
+    if not ok:
+        mark_console_failed(path)
+        note("viewer: no Terminal window (%s); run by hand: %s" % (first_why, by_hand_line(run)))
+        return False
+    say("viewer: Terminal window on %s%s" % (path, " · " + why if why else ""))
+    return True
+
+
+def open_console_if_dark(run, viewer=None, dry_run=False):
+    """The opener for a primitive that starts a head into a run that may already be watched:
+    one window per run, so the owner's `q` and a by-hand restart get a fresh one while a running
+    console is never doubled. Away runs included — the key alone decides. Concurrent openers
+    (N Agent lanes in one message run N spawn-guard hooks at once; two lane.py workers a second
+    apart) settle on an atomic claim, `<command file>.opening`, created with O_EXCL: the claimant
+    opens, every other caller inside CONSOLE_START_GRACE_S reads the claim and opens nothing, and
+    a claim older than the grace window is stale (its console died or never started) and is taken
+    over — the check-then-act gap the grace stamp alone left open (critic F2 of the 2026-09-08
+    watcher review)."""
+    if viewer is None:
+        viewer, _ = run_viewer_key(run)
+    if viewer != "terminal":
+        return open_console(run, viewer=viewer, dry_run=dry_run)
+    live = console_alive(run)
+    if live and not dry_run:
+        say("viewer: a console is already alive (pid %s) · no second window"
+            % ", ".join(str(p) for p in live))
+        return False
+    if not live and not dry_run:
+        age = console_starting(run)
+        if age is not None:
+            say("viewer: a console was opened %.0f s ago and may still be starting · no second "
+                "window" % age)
+            return False
+        claim = console_command_path(run) + ".opening"
+        try:
+            os.close(os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except FileExistsError:
+            try:
+                age = time.time() - os.path.getmtime(claim)
+            except OSError:
+                age = 0.0
+            if 0 <= age < CONSOLE_START_GRACE_S:
+                say("viewer: another opener claimed this run %.0f s ago · no second window" % age)
+                return False
+            try:
+                os.utime(claim, None)                 # a stale claim: taken over
+            except OSError:
+                pass
+        except OSError as exc:
+            note("viewer: cannot claim the console (%s); opening anyway" % exc)
+    return open_console(run, viewer=viewer, dry_run=dry_run,
+                        why="no console was alive" if not live else "")
+
+
 # ------------------------------------------------------------------ meter and waste --------
 
 def billed_field(line, pattern, cast):
@@ -862,25 +1320,76 @@ def billed_field(line, pattern, cast):
         return None
 
 
-def meter_line(events, run, override=None):
+def seed_sessions(events):
+    """The session ids the record marks as a launcher's placeholder: `run-open --session-kind
+    seed` (T7 of the token-efficiency findings, 2026-09-07). A seed session never ran, so it is
+    no head: the table skips it and the meter is never asked to read a transcript it has none
+    of. The marking is the record's own field, never the run's or the session's name."""
+    found = []
+    for ev in events:
+        if ev.get("event") == "run-open" and ev.get("session_kind") == "seed":
+            sid = ev.get("session")
+            if isinstance(sid, str) and sid not in found:
+                found.append(sid)
+    return found
+
+
+def run_window(events):
+    """(start, end, source): the run's OWN window as the record spells it — the run-open
+    timestamp to the run-close timestamp, or to the record's last event where the record holds
+    no run-close (T6, 2026-09-07). Metering a head over this window rather than over its whole
+    session stops a session shared with attended work from being counted whole against one run.
+    (None, None, reason) where the record carries no usable timestamp."""
+    stamps = [ev.get("ts") for ev in events if isinstance(ev.get("ts"), str) and ev.get("ts")]
+    ro = run_open(events)
+    start = ro.get("ts") if isinstance(ro.get("ts"), str) else (stamps[0] if stamps else None)
+    close = next((ev for ev in reversed(events) if ev.get("event") == "run-close"), None)
+    if close is not None and isinstance(close.get("ts"), str):
+        end, how = close["ts"], "run-close"
+    elif stamps:
+        end, how = stamps[-1], "the record's last event (no run-close)"
+    else:
+        end, how = None, "no timestamped event"
+    if not start or not end:
+        return None, None, "the record carries no usable window (%s)" % how
+    return start, end, "run-open %s → %s %s" % (start, how, end)
+
+
+def meter_cmd(meter, run, sid, ro, lanes, start=None, end=None):
+    """The meter's command line for one head session, over a window when one is given: the
+    `--start`/`--end` pair the meter already takes (its own main), so the head is metered over
+    the run's window rather than over its whole session (T6)."""
+    vault, root = vault_root(), projects_root()
+    cmd = [sys.executable, "-B", meter, "--session", sid, "--lanes", lanes,
+           "--spawn-record", record_path(run), "--projects-root", root, "--vault", vault,
+           "--project-dir", os.path.join(root, dashed(vault))]
+    if ro.get("regime") in ("single", "multi") and ro.get("regime_src") in ("owner", "head"):
+        cmd += ["--delegation", ro["regime"], "--delegation-src", ro["regime_src"]]
+    if start:
+        cmd += ["--start", start]
+    if end:
+        cmd += ["--end", end]
+    return cmd
+
+
+def meter_line(events, run, override=None, start=None, end=None, session=None):
     """The meter's billed line for the head session, or `failed: <reason>`. Lanes come from
     the record (--lanes auto); before any lane has a transcript the meter refuses and the head
-    alone is metered (--lanes none), which the line itself says."""
+    alone is metered (--lanes none), which the line itself says. `session` meters a named head
+    rather than the record's last one, and `start`/`end` meter it over a window (T6): both are
+    for the waste table's whole-run rows, and every other caller's behaviour is unchanged."""
     if override:
         return override
-    sid, _ = head_session(events)
+    sid = session or head_session(events)[0]
     if not sid:
         return "failed: no head session in the record"
+    if sid in seed_sessions(events):
+        return "seed (skipped): run-open marks session %s a seed, which never ran" % sid
     meter = os.path.join(HERE, "fable-share.py")
     if not os.path.isfile(meter):
         return "failed: fable-share.py not found beside handsoff.py"
-    vault, root = vault_root(), projects_root()
-    base = [sys.executable, "-B", meter, "--session", sid, "--lanes", "auto",
-            "--spawn-record", record_path(run), "--projects-root", root, "--vault", vault,
-            "--project-dir", os.path.join(root, dashed(vault))]
     ro = run_open(events)
-    if ro.get("regime") in ("single", "multi") and ro.get("regime_src") in ("owner", "head"):
-        base += ["--delegation", ro["regime"], "--delegation-src", ro["regime_src"]]
+    base = meter_cmd(meter, run, sid, ro, "auto", start, end)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     for lanes in ("auto", "none"):
         cmd = list(base)
@@ -1276,21 +1785,30 @@ def cmd_run_open(a):
         die("hand-off document not found: %s" % handoff)
     pid, src = head_pid(a.pid)
     ev = event(a.run, "run-open", session=a.session, head=a.head, regime=a.regime,
-               regime_src=a.regime_src, handoff=handoff, detail=a.detail, pid_src=src)
+               regime_src=a.regime_src, handoff=handoff, detail=a.detail, pid_src=src,
+               session_kind=a.session_kind)
     if pid is not None:
         ev["pid"] = pid
     if a.envelope_usd is not None:
         ev["envelope_usd"] = a.envelope_usd
     ev["grants_file"] = grants_path(a.run, a.grants_file)
+    ev["on_limit"], ev["on_limit_src"] = on_limit_choice(a, ev["grants_file"])
+    ev["viewer"], ev["viewer_src"] = viewer_choice(a, ev["grants_file"])
     if a.dry_run:
         say("run-open: dry run · %s" % json.dumps(ev, ensure_ascii=False))
+        open_console(a.run, viewer=ev["viewer"], dry_run=True)
         return 0
     write_grants(a.run, "run-open", a)
     write_pointer(a.run, a.session)
     append_record(path, ev)
-    say("run-open: %s · session %s · pid %s (%s) · hand-off %s · grants %s"
-        % (a.run, a.session[:8], "none" if pid is None else pid, src, handoff,
-           ev["grants_file"]))
+    say("run-open: %s · session %s (session_kind %s) · pid %s (%s) · hand-off %s · grants %s · "
+        "on_limit %s (%s) · viewer %s (%s)"
+        % (a.run, a.session[:8], ev["session_kind"], "none" if pid is None else pid, src,
+           handoff, ev["grants_file"], ev["on_limit"], ev["on_limit_src"], ev["viewer"],
+           ev["viewer_src"]))
+    # The run's own window, at once and unguarded: a run-open is the run's first act, so no
+    # console can be alive for it yet. A viewer failure never fails the launch.
+    open_console(a.run, viewer=ev["viewer"])
     return 0
 
 
@@ -1322,9 +1840,13 @@ def cmd_run_resume(a):
     # rewrite here narrowed every successor to the default writes (found live 2026-09-06, run 3:
     # the head fence denied the head's own install; register entry of that date). Explicit
     # flags still rewrite, as `grants` does.
-    keep = not a.grant and not a.write and os.path.isfile(ev["grants_file"])
+    keep = (not a.grant and not a.write and getattr(a, "on_limit", None) is None
+            and getattr(a, "viewer", None) is None
+            and os.path.isfile(ev["grants_file"]))   # --on-limit or --viewer alone rewrites
     if keep:
         ev["grants"] = "kept"
+    ev["on_limit"], ev["on_limit_src"] = on_limit_choice(a, ev["grants_file"])
+    ev["viewer"], ev["viewer_src"] = viewer_choice(a, ev["grants_file"])
     if a.dry_run:
         say("run-resume: dry run · %s" % json.dumps(ev, ensure_ascii=False))
         return 0
@@ -1335,15 +1857,43 @@ def cmd_run_resume(a):
     if stale is not None:
         append_record(path, event(a.run, "observation", phase="", what="stale-pack",
                                   note="run-resume: " + stale))
-    say("run-resume: %s · session %s (%s) · pid %s (%s) · grants %s%s"
+    say("run-resume: %s · session %s (%s) · pid %s (%s) · grants %s%s · on_limit %s · viewer %s"
         % (a.run, sid[:8], how, "none" if pid is None else pid, src, ev["grants_file"],
-           " (kept)" if keep else ""))
+           " (kept)" if keep else "", ev["on_limit"], ev["viewer"]))
+    return 0
+
+
+LEDGER_HINT = (" — a record with no run-open is a plain lane run: `ledger --observation \"<what>\"`"
+               " writes an observation there, with no hand-off row")
+
+
+def ledger_observation(a, path):
+    """`ledger --observation`: ONE observation event on any record that exists, and no hand-off
+    row. On a plain record (no `run-open`) it is the only ledger form there is; on a record with
+    a `run-open` it is the head's aside that is not a finding, so the findings ledger keeps only
+    findings. `--phase` is optional and the phase is empty without it."""
+    events = read_existing_record(path)
+    shape = "plain lane run (no run-open)" if is_plain_run(events) else "run-open present"
+    ev = event(a.run, "observation", phase=a.phase or "", what=a.observation)
+    if a.dry_run:
+        say("ledger --observation: dry run · %s · %s"
+            % (shape, json.dumps(ev, ensure_ascii=False)))
+        return 0
+    append_record(path, ev)
+    say("ledger: observation recorded (%s) · %s · no hand-off row"
+        % (one_line(a.observation)[:70], shape))
     return 0
 
 
 def cmd_ledger(a):
     path = record_path(a.run)
-    events = require_record(path)
+    if a.observation is not None:
+        return ledger_observation(a, path)
+    missing = [f for f in ("phase", "what", "evidence", "routing") if getattr(a, f) is None]
+    if missing:
+        die("ledger needs %s, or --observation \"<what>\" for an observation with no ledger row"
+            % ", ".join("--" + m for m in missing))
+    events = require_record(path, LEDGER_HINT)
     ho = handoff_of(events, a.handoff)
     lines = read_text(ho, "hand-off").split("\n")
     span = table_span(lines, "Findings ledger")
@@ -1516,6 +2066,41 @@ def orientation(events, scope, m):
     return m["context"] - first, None
 
 
+def usd(value):
+    """A signed dollar figure with the sign before the symbol: `$80.38`, `-$9.62`."""
+    return ("-$%.2f" % -value) if value < 0 else ("$%.2f" % value)
+
+
+def envelope_status(events, run, meter_override, start):
+    """(the gate line's envelope text, the remainder or None, the source): `envelope: none` when
+    run-open carries no envelope_usd; `envelope: unmeasured (<reason>)` when `envelope_left`
+    has no number (the meter gave no session total); else `envelope: $<spent> of $<envelope>,
+    remainder $<r>`, spent being the envelope minus the remainder `envelope_left` computed."""
+    envelope = run_open(events).get("envelope_usd")
+    if envelope is None or isinstance(envelope, bool):
+        return "envelope: none", None, "run-open carries no envelope_usd"
+    left, why = envelope_left(events, run, meter_override, start)
+    if left is None:
+        return "envelope: unmeasured (%s)" % why, None, why
+    spent = round(float(envelope) - left, 2)
+    return ("envelope: %s of %s, remainder %s" % (usd(spent), usd(float(envelope)), usd(left)),
+            left, why)
+
+
+def envelope_stop(path, a, env_text, env_why, figure):
+    """The envelope stop: the stop-condition event (which envelope, lane head, the figures in
+    its note) and the gate's exit 5. The run ends here; a successor refuses on the same figure."""
+    figures = env_text[len("envelope: "):]
+    append_record(path, event(
+        a.run, "stop-condition", which="envelope", lane="head",
+        action="gate refused item %s: the envelope is spent" % a.to,
+        note="%s (%s)" % (figures, env_why)))
+    say("gate: %s · %s · %s · REFUSED (stop-condition envelope: the remainder is at or below "
+        "zero) → the run stops here; the owner tops up the envelope before any successor"
+        % (a.to, figure, env_text))
+    return EXIT_ENVELOPE
+
+
 def cmd_gate(a):
     path = record_path(a.run)
     events = require_record(path)
@@ -1530,9 +2115,13 @@ def cmd_gate(a):
     w, e = window(), edges()
     threshold = e[1]
     orient = orientation(events, scope, m) if not prior else None
+    # The envelope (register entry 2026-09-07): measured at every gate, on the same session
+    # index the successor uses; a remainder at or below zero is the stop, armed or not.
+    env_text, env_left, env_why = envelope_status(events, a.run, a.meter_line, scope - 1)
+    spent_out = env_left is not None and env_left <= 0
     if m.get("context") is None:
         second = bool(prior) and prior[-1].get("metered") is False
-        decision = "refuse" if (second and is_armed) else "allow"
+        decision = "refuse" if ((second and is_armed) or spent_out) else "allow"
         ev = event(a.run, "gate", item=a.to, context=None, percent=None, band="unmetered",
                    armed=is_armed, decision=decision, metered=False)
         if orient is not None:
@@ -1541,24 +2130,27 @@ def cmd_gate(a):
                     note="item %s: %s%s" % (a.to, m["reason"],
                                             "; second consecutive" if second else ""))
         if a.dry_run:
-            say("gate: dry run · unmetered (%s) · %s" % (m["reason"], decision))
+            say("gate: dry run · unmetered (%s) · %s · %s" % (m["reason"], decision, env_text))
             return 0
         append_record(path, ev)
         append_record(path, obs)
+        if spent_out:
+            return envelope_stop(path, a, env_text, env_why, "unmetered (%s)" % m["reason"])
         if decision == "refuse":
             append_record(path, event(
                 a.run, "stop-condition", which="unmetered", lane="head",
                 action="gate refused item %s: second consecutive unmetered gate (armed by %s)"
                        % (a.to, how), note=m["reason"]))
             say("gate: unmetered (%s) · second consecutive · armed (%s) · REFUSED item %s → "
-                "handoff --final --band unmetered, then successor" % (m["reason"], how, a.to))
+                "handoff --final --band unmetered, then successor · %s"
+                % (m["reason"], how, a.to, env_text))
             return 7
-        say("gate: unmetered (%s) · %s · item %s allowed%s" % (
+        say("gate: unmetered (%s) · %s · item %s allowed%s · %s" % (
             m["reason"], "second consecutive" if second else "first miss", a.to,
-            " · soft: fix the metering" if second else ""))
+            " · soft: fix the metering" if second else "", env_text))
         return 0
     over = m["context"] * 100 >= threshold * w
-    decision = "refuse" if (over and is_armed) else "allow"
+    decision = "refuse" if ((over and is_armed) or spent_out) else "allow"
     ev = event(a.run, "gate", item=a.to, context=m["context"], percent=m["percent"],
                band=m["band"], armed=is_armed, decision=decision, metered=True)
     figure = "context %s (%d %%) · band %d · armed %s" % (
@@ -1570,9 +2162,11 @@ def cmd_gate(a):
         else:
             figure += " · orientation %s" % format(orient[0], ",")
     if a.dry_run:
-        say("gate: dry run · %s · %s · %s" % (a.to, figure, decision))
+        say("gate: dry run · %s · %s · %s · %s" % (a.to, figure, decision, env_text))
         return 0
     append_record(path, ev)
+    if spent_out:
+        return envelope_stop(path, a, env_text, env_why, figure)
     if decision == "refuse":
         append_record(path, event(
             a.run, "stop-condition", which="band", lane="head",
@@ -1580,11 +2174,11 @@ def cmd_gate(a):
                    % (a.to, m["percent"], threshold, how),
             note="handoff --final --band %d, watch in-flight lanes, then successor" % threshold))
         say("gate: %s · %s · REFUSED (stop-condition band) → handoff --final --band %d, watch "
-            "in-flight lanes, then successor" % (a.to, figure, threshold))
+            "in-flight lanes, then successor · %s" % (a.to, figure, threshold, env_text))
         return 4
     warn = (" · warn: at or above the second edge (%d %%), soft — finish what is in flight, "
             "start nothing new" % threshold) if over else ""
-    say("gate: %s · %s · allow%s" % (a.to, figure, warn))
+    say("gate: %s · %s · allow%s · %s" % (a.to, figure, warn, env_text))
     return 0
 
 
@@ -1801,7 +2395,8 @@ def cmd_handoff(a):
     if a.final:
         sid, _ = head_session(events)
         m = measure_head(sid)
-        pid, _ = head_pid(a.pid)
+        pid, psrc = final_pid(events, a.pid)
+        say("handoff: pid %s (%s)" % ("none" if pid is None else pid, psrc))
         exit_ev = event(a.run, "head-exit", band=band_value(a.band, m),
                         context=context_text(m), handoff=ho, pack=True,
                         spent_usd=session_spent(meter_line(events, a.run, a.meter_line)))
@@ -1865,8 +2460,19 @@ def cmd_successor(a):
     ro = run_open(events)
     ho = handoff_of(events, a.handoff)
     prompt = resume_prompt(ho)
+    xi = last_index(events, ("head-exit",))
+    envelope = ro.get("envelope_usd")
     if a.budget_usd is not None:
         budget, bsrc = float(a.budget_usd), "--budget-usd"
+    elif xi >= 0 and seed_exit(events[xi]) and isinstance(envelope, (int, float)) \
+            and not isinstance(envelope, bool):
+        # A seed head-exit records a session that never ran: it left no transcript, so the
+        # meter has nothing to read and the remainder is the envelope minus the spend the
+        # record already holds — never a premise failure (register entry 2026-09-07).
+        spent, _ = spent_sum(events, last_index(events, SESSION_EVENTS))
+        budget = round(float(envelope) - spent, 2)
+        bsrc = ("envelope (seed): the last head-exit is a seed exit, so envelope $%s minus "
+                "$%.2f spent over every head-exit, unmetered" % (envelope, spent))
     else:
         budget, bsrc = envelope_left(events, a.run, a.meter_line,
                                      last_index(events, SESSION_EVENTS))
@@ -1882,7 +2488,13 @@ def cmd_successor(a):
     have_exit = hi >= 0 and events[hi].get("event") == "head-exit"
     sid, sev = head_session(events)
     m = measure_head(sid)
-    own_pid, _ = head_pid(a.pid)
+    # The same rule `handoff --final` carries, through the same helper: on a SEEDED record with
+    # no --pid the seed's own run-open pid is taken and the parent walk is not run. The walk
+    # from here reaches the live attended session, so the head-exit written below — and the
+    # predecessor pid the starter then waits on, which reads that event — named the caller
+    # instead of the launcher shell the seed pattern exists for (register entries 2026-09-07
+    # and 2026-09-08).
+    own_pid, own_src = final_pid(events, a.pid)
     if have_exit:
         exit_ev = events[hi]
     else:
@@ -1891,6 +2503,7 @@ def cmd_successor(a):
                         spent_usd=session_spent(meter_line(events, a.run, a.meter_line)))
         if own_pid is not None:
             exit_ev["pid"] = own_pid
+        say("successor: pid %s (%s)" % ("none" if own_pid is None else own_pid, own_src))
     if a.predecessor_pid is not None:
         pred, psrc = int(a.predecessor_pid), "--predecessor-pid"
     elif exit_ev.get("pid") is not None:
@@ -1908,7 +2521,7 @@ def cmd_successor(a):
     plan = ("starter: wait ≤%d s for pid %s (%s); abort if a head-successor already follows "
             "the head-exit, if the previous head-exit was unmetered too, or on timeout; then "
             "from %s start the successor with the resume prompt (%d chars) on stdin, env "
-            "AIMYTH_HANDSOFF=1 AIMYTH_HANDSOFF_RUN=%s%s, budget $%.2f (%s), output %s, and "
+            "AIMYTH_HANDSOFF=1 AIMYTH_HANDSOFF_RUN=%s%s, budget $%.2f (budget_src: %s), output %s, and "
             "supervise it (D30)" % (
                 a.wait_s, "none" if pred is None else pred, psrc, vault_root(), len(prompt),
                 a.run, " CLAUDE_CONFIG_DIR=%s" % a.config_dir if a.config_dir else "", budget,
@@ -1917,6 +2530,7 @@ def cmd_successor(a):
     if a.dry_run:
         say("successor: dry run · %s" % plan)
         say("command: %s < resume prompt" % " ".join(cmd))
+        open_console_if_dark(a.run, dry_run=True)
         return 0
     if not have_exit:
         append_record(path, exit_ev)
@@ -1948,6 +2562,9 @@ def cmd_successor(a):
     say("successor: %s · starter pid %d detached (log %s) · %s" % (
         "head-exit already recorded" if have_exit
         else "head-exit recorded (band %s)" % exit_ev["band"], proc.pid, log, plan))
+    # The successor's window: one per run, so the owner's `q` gets a fresh one and a console
+    # still running is never doubled. A viewer failure never fails the launch.
+    open_console_if_dark(a.run)
     return 0
 
 
@@ -2046,7 +2663,7 @@ def out_size(out):
     return os.path.getsize(out)
 
 
-def start_head(a, path, budget, out, t0):
+def start_head(a, path, budget, out, t0, watch=None):
     """A fresh head from the hand-off's resume prompt (the start path the starter has always
     used), then the head-successor and supervise events: (proc, sid, out, offset, start index)
     or None after successor-aborted, reason start-failed."""
@@ -2057,6 +2674,8 @@ def start_head(a, path, budget, out, t0):
     cmd = head_command(a.harness_bin, sid, budget, a.model, a.effort)
     offset = out_size(out)
     os.makedirs(os.path.dirname(out), exist_ok=True)
+    if watch is not None and watch.check():   # the last act before the start (D43; C2 H1: after
+        return "stood-down"                     # the meter and the pack guard, nothing follows)
     with open(out, "ab") as handle:
         try:
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=handle, stderr=handle,
@@ -2075,6 +2694,7 @@ def start_head(a, path, budget, out, t0):
                               out=out, supervisor_pid=os.getpid()))
     say("supervisor: head-successor pid %d session %s after %d s → %s"
         % (proc.pid, sid, time.time() - t0, out))
+    open_console_if_dark(a.run)   # the supervisor's own successor start after a head exit
     return proc, sid, out, offset, start
 
 
@@ -2189,7 +2809,91 @@ def remainder(events, a, cls, start):
     return cap, "%s: the cap in hand $%.2f reused" % (why, cap)
 
 
-def wait_for_reset(a, path, start, text, stopped_at):
+def supervisor_stop_file(run):
+    """The supervisor's stop marker (D43): `supervise --stop` and `close` write it; a sleeping
+    supervisor stands down at its next tick, and a supervisor whose head exits with the marker
+    on disk stands down before any successor decision (register entry 2026-09-07).
+
+    It is cleared at exactly three sites, and a bare arming is not one of them: `resume-head`,
+    a `successor` CALLED BY A HEAD (the detached `_starter`, which only cmd_successor spawns),
+    and the run's own `close`, which writes it as the last thing it does."""
+    return os.path.join(store_root(), "spawn-records", token(run, "run id") + "-supervisor.stop")
+
+
+def clear_stop_marker(run):
+    """A marker left by an earlier --stop or close is not this arming's (the heartbeat's rule).
+    Called from the three sites supervisor_stop_file names, and nowhere else."""
+    marker = supervisor_stop_file(run)
+    if os.path.exists(marker):
+        try:
+            os.remove(marker)
+            say("supervisor: a stale stop marker removed (%s)" % marker)
+        except OSError as exc:
+            note("stale stop marker not removed: %s" % exc)
+
+
+def run_on_limit(events, run):
+    """(value, source, grants file): the run's limit gate (D42) from the DEFAULT grants path —
+    the one file the head fence and the status hook read too (C2 H2: a --grants-file override
+    is outside the gate, and write_grants refuses `resume` there). A missing file or key is the
+    default `stop`, and the source says which."""
+    path = grants_path(run)
+    value, src = on_limit_of(read_grants(path))
+    return value, src, path
+
+
+class StandDown(object):
+    """The limit wait's stand-down watch (D43): the head transcript's byte size and mtime,
+    baselined AFTER the stop is classified (so the harness's own stop record sits inside the
+    baseline), plus the stop marker. check() records the reason and detail and returns True."""
+
+    def __init__(self, run, transcript, on_limit, src):
+        self.run, self.on_limit, self.src = run, on_limit, src
+        self.path = transcript if transcript and os.path.isfile(transcript) else None
+        self.size, self.mtime = self._stat()
+        self.marker = supervisor_stop_file(run)
+        self.reason = self.detail = None
+
+    def _stat(self):
+        if not self.path:
+            return None, None
+        try:
+            st = os.stat(self.path)
+            return st.st_size, st.st_mtime
+        except OSError:
+            return None, None
+
+    def label(self):
+        if self.path and self.size is not None:
+            return "transcript %s (%d bytes)" % (self.path, self.size)
+        return "unwatched (no transcript file)"
+
+    def check(self):
+        if os.path.exists(self.marker):
+            self.reason, self.detail = "stopped", "the stop marker %s appeared" % self.marker
+            return True
+        if self.path:
+            size, mtime = self._stat()
+            if (size, mtime) != (self.size, self.mtime):
+                self.reason = "resumed-by-hand"
+                self.detail = ("the head transcript changed during the wait (someone continued "
+                               "the session): %s → %s bytes, mtime %s → %s; %s"
+                               % (self.size, "gone" if size is None else size,
+                                  fmt_ts(self.mtime) if self.mtime else "?",
+                                  fmt_ts(mtime) if mtime else "gone", self.path))
+                return True
+        return False
+
+
+def stand_down(path, run, reason, detail, on_limit, src, waited):
+    """The designed stop (D42, D43): a supervisor-stood-down event and exit 0 — never an abort."""
+    append_record(path, event(run, "supervisor-stood-down", reason=reason, on_limit=on_limit,
+                              on_limit_src=src, waited_s=round(waited), note=detail))
+    say("supervisor: stood down (%s) — %s; the hand-off is the recovery" % (reason, detail))
+    return 0
+
+
+def wait_for_reset(a, path, start, text, stopped_at, watch=None):
     """The limit wait (D28, D30): --reset-at first, else the stop text's reset time, and — only
     when --probe was passed (opt-in, owner ruling 2026-09-06) — the haiku probe under the same
     login every --probe-interval-s; sleeps in --tick-s ticks so a run-close written meanwhile
@@ -2216,8 +2920,10 @@ def wait_for_reset(a, path, start, text, stopped_at):
         plan = "probe every %d s under %s" % (
             a.probe_interval_s,
             "CLAUDE_CONFIG_DIR=%s" % a.config_dir if a.config_dir else "the same login")
+    extra = ({"watch": watch.label(), "on_limit": watch.on_limit, "on_limit_src": watch.src}
+             if watch is not None else {"watch": "unwatched (hand-run wait)"})
     append_record(path, event(a.run, "stop-condition", which="limit", lane="head",
-                              action=plan, note=one_line(text or "")[:NOTE_CUT]))
+                              action=plan, note=one_line(text or "")[:NOTE_CUT], **extra))
     say("supervisor: limit — %s" % plan)
 
     def closed():
@@ -2241,6 +2947,8 @@ def wait_for_reset(a, path, start, text, stopped_at):
             if closed():
                 ended("closed during the wait: a run-close follows this head's start")
                 return "closed", source, waited()
+            if watch is not None and watch.check():
+                return "stood-down", source, waited()
             time.sleep(max(0.0, min(a.tick_s, target - time.time())))
         ended("reset reached at %s after %d s" % (fmt_ts(target), waited()))
         return "ok", source, waited()
@@ -2255,6 +2963,8 @@ def wait_for_reset(a, path, start, text, stopped_at):
             if closed():
                 ended("closed during the wait: a run-close follows this head's start")
                 return "closed", "probe", waited()
+            if watch is not None and watch.check():
+                return "stood-down", "probe", waited()
             time.sleep(max(0.0, min(a.tick_s, due - time.time())))
         ok, what = probe(a.harness_bin, a.config_dir)
         last_probe = time.time()
@@ -2311,10 +3021,12 @@ def resume_head(a, path, sid, budget, bsrc, out, m, cls, waited, source, stopped
                               out=out, supervisor_pid=os.getpid()))
     say("supervisor: head-resumed pid %d session %s (resume %d) at %s tokens (%s) after %d s "
         "→ %s" % (proc.pid, sid, n, format(m["context"], ","), m.get("source"), waited, out))
+    open_console_if_dark(a.run)   # the in-place resume: `_resume-head`'s own start, and the
+                                  # supervisor's resume after a limit reset
     return proc, out, offset, start
 
 
-def successor_path(a, path, m, band, cls, budget, pid, t0):
+def successor_path(a, path, m, band, cls, budget, pid, t0, watch=None):
     """The head-exit the supervisor owes (the head wrote none), then one successor from the
     hand-off under the loop guards: (proc, sid, out, offset, start index) or None."""
     events, _ = read_record(path)
@@ -2324,10 +3036,10 @@ def successor_path(a, path, m, band, cls, budget, pid, t0):
     if pid is not None:
         exit_ev["pid"] = pid
     append_record(path, exit_ev)
-    return succeed_exit(a, path, budget, t0)
+    return succeed_exit(a, path, budget, t0, watch)
 
 
-def succeed_exit(a, path, budget, t0):
+def succeed_exit(a, path, budget, t0, watch=None):
     """One successor after the record's last head-exit, under the loop guards (idempotent: a
     head-successor that appeared meanwhile is the duplicate guard's refusal)."""
     events, _ = read_record(path)
@@ -2336,7 +3048,36 @@ def succeed_exit(a, path, budget, t0):
         abort(path, a.run, reason, detail)
         return None
     out, _ = next_out(a.run)
-    return start_head(a, path, budget, out, t0)
+    return start_head(a, path, budget, out, t0, watch)
+
+
+def seed_run_open(events):
+    """The record's `run-open` event when it marks a seed session (`session_kind: seed`, T7),
+    else None. The marking is the record's own field, never the run's or the session's name."""
+    for ev in events:
+        if ev.get("event") == "run-open" and ev.get("session_kind") == "seed":
+            return ev
+    return None
+
+
+def final_pid(events, arg):
+    """(pid, source) for the head-exit `handoff --final` writes. --pid wins, as everywhere.
+
+    On a SEEDED record the seed's own recorded pid is taken and the parent walk is not run: the
+    launcher shell calls `handoff --final` in its own process, so the walk reaches the LIVE
+    attended session instead of the placeholder the run was opened for, and the first starter
+    then waits on the launcher itself (register entry 2026-09-07: one launch lost a starter that
+    way). A head record — no seed `run-open` — resolves as before. A seed `run-open` that
+    recorded no pid falls through to the walk too, since there is nothing better to take."""
+    if arg is not None:
+        return int(arg), "arg"
+    ro = seed_run_open(events)
+    if ro is not None and ro.get("pid") is not None:
+        try:
+            return int(ro["pid"]), "run-open, seed"
+        except (TypeError, ValueError):
+            pass
+    return head_pid(None)
 
 
 def seed_exit(ev):
@@ -2402,6 +3143,19 @@ def supervise_loop(a, path, sid, proc, pid, out, offset, start, t0):
                                       note="%s: %s" % (cls, d["note"])))
             say("supervisor: %s — ended" % cls)
             return 0
+        # The owner's stop outranks every fork below (register entry 2026-09-07: a marker written
+        # at 16:22 did not stop the successor started after a SIGTERM at 16:24). A marker on disk
+        # when the head exits stands the supervisor down BEFORE any successor decision, whatever
+        # the exit was classified as, a signalled head included. It sits under the two forks
+        # above because neither decides anything: `closed` is this run's own close, which writes
+        # this very marker, and `handed-over` already has its successor.
+        marker = supervisor_stop_file(a.run)
+        if os.path.exists(marker):
+            on_limit, osrc, _ = run_on_limit(events, a.run)
+            return stand_down(path, a.run, "stopped",
+                              "a stop marker was on disk at the head's exit (%s): no successor "
+                              "and no resume after a %s stop" % (marker, cls),
+                              on_limit, osrc, time.time() - stopped_at)
         if cls == "classifier-missing":
             return abort(path, a.run, "classifier-missing", d["note"])
         # Two stops of the same fault end the loop, the successor cap being only the backstop:
@@ -2412,9 +3166,24 @@ def supervise_loop(a, path, sid, proc, pid, out, offset, start, t0):
                 (cls == "completed" and before == "completed"):
             return abort(path, a.run, "repeat-stop", "two consecutive %s and %s stops: the "
                          "head does not get a third start on the same fault" % (before, cls))
-        waited, source = 0.0, "none: no wait after a %s stop" % cls
+        waited, source, watch = 0.0, "none: no wait after a %s stop" % cls, None
         if cls == "limit":
-            status, source, waited = wait_for_reset(a, path, start, d["text"], stopped_at)
+            on_limit, osrc, gpath = run_on_limit(events, a.run)
+            if on_limit != "resume":   # the gate's default (D42): stand down, no wait
+                append_record(path, event(a.run, "stop-condition", which="limit", lane="head",
+                                          action="stand-down: on_limit stop", on_limit=on_limit,
+                                          on_limit_src=osrc, grants_file=gpath,
+                                          note=one_line(d["text"] or "")[:NOTE_CUT]))
+                say("supervisor: limit — on_limit stop (%s): no wait, no resume" % osrc)
+                return stand_down(path, a.run, "limit-stop",
+                                  "on_limit stop (%s): the limit ends this run's supervision"
+                                  % osrc, on_limit, osrc, 0.0)
+            watch = StandDown(a.run, transcript_for(sid) if sid else None, on_limit, osrc)
+            status, source, waited = wait_for_reset(a, path, start, d["text"], stopped_at,
+                                                    watch)
+            if status == "stood-down":
+                return stand_down(path, a.run, watch.reason, watch.detail, on_limit, osrc,
+                                  waited)
             if status == "closed":
                 append_record(path, event(a.run, "observation", phase="", what="supervisor ended",
                                           note="closed during the reset wait"))
@@ -2449,6 +3218,9 @@ def supervise_loop(a, path, sid, proc, pid, out, offset, start, t0):
                 return abort(path, a.run, "duplicate-resume", "a head-resumed or head-successor "
                              "already follows this head's start: another supervisor got there "
                              "first")
+            if watch is not None and watch.check():   # the last act before a start (D43)
+                return stand_down(path, a.run, watch.reason, watch.detail, watch.on_limit,
+                                  watch.src, waited)
             resumed = resume_head(a, path, sid, budget, bsrc, out, m, cls, waited, source,
                                   stopped_at)
             if resumed is not None:
@@ -2457,7 +3229,10 @@ def supervise_loop(a, path, sid, proc, pid, out, offset, start, t0):
         band = {"limit": "limit", "error": "error"}.get(cls) or band_value(None, m)
         say("supervisor: successor path — context %s (%s), band %s, resumes %d, budget $%.2f "
             "(%s)" % (context_text(m), m.get("source"), band, resumes, budget, bsrc))
-        started = successor_path(a, path, m, band, cls, budget, pid, t0)
+        started = successor_path(a, path, m, band, cls, budget, pid, t0, watch)
+        if started == "stood-down":
+            return stand_down(path, a.run, watch.reason, watch.detail, watch.on_limit,
+                              watch.src, waited)
         if started is None:
             return 1
         proc, sid, out, offset, start = started
@@ -2479,6 +3254,12 @@ def cmd_starter(a):
     reason, detail = start_guards(events, last_index(events, ("head-exit",)), gone, why)
     if reason:
         return abort(path, a.run, reason, detail)
+    # One of the marker's three clearing sites: this starter is detached by cmd_successor and by
+    # nothing else (the only `_starter` spawn in this file), so reaching here means a HEAD called
+    # `successor`, and the head's own hand-over clears an earlier arming's marker. The supervisor's
+    # own successor path does not come through here — it calls succeed_exit in process, under the
+    # stand-down check at the head's exit.
+    clear_stop_marker(a.run)
     started = start_head(a, path, a.budget, a.out, t0)
     if started is None:
         return 1
@@ -2497,18 +3278,35 @@ def cmd_supervise_internal(a):
     a.budget = a.budget_usd
     say("supervisor: %s pid %d attached to head pid %d (%s) session %s · out %s" % (
         now(), os.getpid(), a.pid, "alive" if alive else "already gone", a.session, a.out))
+    # No clear here: arming a supervisor is not one of the marker's three clearing sites
+    # (resume-head, a successor called by a head, close). A run the owner stopped stays stopped
+    # across a re-arming, and this supervisor stands down at the head's exit.
     return supervise_loop(a, path, a.session, None, a.pid, a.out, offset, start, t0)
 
 
 def cmd_supervise(a):
     path = record_path(a.run)
     events = require_record(path)
+    if a.stop:   # before any pid resolution: a stopped run has no live head (D43, C1 L8)
+        marker = supervisor_stop_file(a.run)
+        if a.dry_run:
+            say("supervise: dry run · would write the stop marker %s" % marker)
+            return 0
+        write_atomic(marker, now() + "\n")
+        append_record(path, event(a.run, "supervise", mode="stop-requested", marker=marker,
+                                  pid=os.getpid()))
+        say("supervise: stop marker written (%s) — a sleeping supervisor stands down at its "
+            "next tick, at most %d s" % (marker, a.tick_s))
+        return 0
     sid, sev = head_session(events)
     if not sid:
         die("no head session in the record: run-open first")
     pid, src = head_pid(a.pid)
     if pid is None:
         die("no harness ancestor to supervise (an attended head has no idle-exit); pass --pid N")
+    if a.pid is not None and not pid_alive(pid):
+        die("pid %d is not alive: a stopped run has no head to supervise; after a limit use "
+            "resume-head or successor (D42; C2 L5)" % pid)
     if a.reset_at:
         parse_reset_at(a.reset_at, time.time())
     out, osrc = a.out, "--out"
@@ -2551,6 +3349,98 @@ def cmd_supervise(a):
     return 0
 
 
+def cmd_watch(a):
+    """`watch --run R` or `watch --session S`: hand the tty to watch.py beside this file (exec,
+    so the keys work). `--session` is the attended-session view — one row per background job of
+    that session, read from its transcript and the harness's job directory (A4)."""
+    script = os.path.join(HERE, "watch.py")
+    if not os.path.isfile(script):
+        die("no watch.py beside handsoff.py at %s" % script)
+    argv = ["--session", a.session] if a.session else ["--run", a.run]
+    for flag, value in (("--refresh", a.refresh), ("--vault", a.vault)):
+        if value is not None:
+            argv += [flag, str(value)]
+    for flag, on in (("--once", a.once), ("--plain", a.plain), ("--no-notify", a.no_notify)):
+        if on:
+            argv.append(flag)
+    os.execv(sys.executable, [sys.executable, "-B", script] + argv)
+
+
+def cmd_resume_head(a):
+    """`resume-head` (D42's recovery; critic C2 M4): resume the record's last head session in
+    place — armed, evented and supervised — the owner's command after a limit the run stood down
+    on, instead of an unarmed hand-run `claude -p --resume`. Detaches at once, like `supervise`."""
+    path = record_path(a.run)
+    events = require_record(path)
+    sid, sev = head_session(events)
+    if not sid:
+        die("no head session in the record: run-open first")
+    out, osrc = a.out, "--out"
+    if not out and sev is not None and sev.get("out"):
+        out, osrc = sev["out"], sev.get("event")
+    if not out:
+        hits = sorted(globmod.glob(os.path.join(store_root(), "spawn-records",
+                                                "%s-head-*.out" % token(a.run, "run id"))),
+                      key=os.path.getmtime)
+        if hits:
+            out, osrc = hits[-1], "newest .out"
+    if not out:
+        out, osrc = next_out(a.run)[0], "fresh"
+    log = os.path.join(store_root(), "spawn-records", "%s-supervise.log" % a.run)
+    cmd = [sys.executable, "-B", os.path.abspath(__file__), "_resume-head", "--run", a.run,
+           "--session", sid, "--out", out, "--harness-bin", a.harness_bin,
+           "--max-wait-s", str(a.max_wait_s), "--probe-interval-s", str(a.probe_interval_s),
+           "--tick-s", str(a.tick_s), "--wait-s", str(a.wait_s), "--effort", a.effort]
+    if a.probe:
+        cmd += ["--probe"]
+    for flag, value in (("--reset-at", a.reset_at), ("--model", a.model),
+                        ("--config-dir", a.config_dir), ("--handoff", a.handoff),
+                        ("--meter-line", a.meter_line)):
+        if value:
+            cmd += [flag, value]
+    if a.budget_usd is not None:
+        cmd += ["--budget-usd", "%.2f" % a.budget_usd]
+    if a.dry_run:
+        say("resume-head: dry run · session %s · out %s (%s) · would detach %s"
+            % (sid, out, osrc, " ".join(cmd[3:])))
+        open_console_if_dark(a.run, dry_run=True)
+        return 0
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    with open(log, "ab") as handle:
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=handle, stderr=handle,
+                                start_new_session=True, cwd=vault_root(),
+                                env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    append_record(path, event(a.run, "supervise", mode="resume-head", session_id=sid, out=out,
+                              supervisor_pid=proc.pid, log=log))
+    say("resume-head: session %s · out %s (%s) · detached pid %d" % (sid, out, osrc, proc.pid))
+    # A by-hand resume-head is the owner at the desk: a window unless one is already alive.
+    open_console_if_dark(a.run)
+    return 0
+
+
+def cmd_resume_head_internal(a):
+    """The detached half of `resume-head`: size the head, resume it in place, supervise it."""
+    t0 = time.time()
+    path = record_path(a.run)
+    events, _ = read_record(path)
+    start = last_index(events, START_EVENTS)
+    a.budget = a.budget_usd
+    budget, bsrc = remainder(events, a, "limit", start)
+    if budget is None:
+        return abort(path, a.run, "budget", bsrc)
+    m = head_context(a.session, events, start)
+    if m.get("context") is None:
+        return abort(path, a.run, "resume-unsized", "the head's context cannot be sized (no "
+                     "transcript, no gate event): start the successor from the hand-off instead")
+    clear_stop_marker(a.run)
+    resumed = resume_head(a, path, a.session, budget, bsrc, a.out, m, "limit", 0.0,
+                          "resume-head (by hand, after the reset)", time.time())
+    if resumed is None:
+        return 1
+    proc, out, offset, start = resumed
+    return supervise_loop(a, path, a.session, proc, None, out, offset, start, t0)
+
+
 def cmd_grants(a):
     """Rewrite the run's grants file and run-<sid> pointer (C2 N7): for a head whose file is
     missing or wrong, since a second run-open is refused by design."""
@@ -2559,17 +3449,22 @@ def cmd_grants(a):
     sid, _ = head_session(events)
     if not sid:
         die("no head session in the record: run-open first")
-    payload = grants_payload(a.run, "grants", a.grant, a.write)
-    ev = event(a.run, "grants", grants_file=grants_path(a.run, a.grants_file),
-               grants=payload["grants"], writes=payload["writes"], session=sid)
+    gpath = grants_path(a.run, a.grants_file)
+    on_limit, osrc = on_limit_choice(a, gpath)
+    viewer, vsrc = viewer_choice(a, gpath)
+    payload = grants_payload(a.run, "grants", a.grant, a.write, on_limit, viewer)
+    ev = event(a.run, "grants", grants_file=gpath, grants=payload["grants"],
+               writes=payload["writes"], session=sid, on_limit=on_limit, on_limit_src=osrc,
+               viewer=viewer, viewer_src=vsrc)
     if a.dry_run:
         say("grants: dry run · %s" % json.dumps(ev, ensure_ascii=False))
         return 0
     write_grants(a.run, "grants", a)
     write_pointer(a.run, sid)
     append_record(path, ev)
-    say("grants: %s · %d grants · %d writes · pointer run-%s"
-        % (ev["grants_file"], len(payload["grants"]), len(payload["writes"]), sid[:8]))
+    say("grants: %s · %d grants · %d writes · on_limit %s (%s) · viewer %s (%s) · pointer run-%s"
+        % (ev["grants_file"], len(payload["grants"]), len(payload["writes"]), on_limit, osrc,
+           viewer, vsrc, sid[:8]))
     return 0
 
 
@@ -2762,9 +3657,77 @@ def cmd_wait_reset(a):
             return ended("probe succeeded after %d s: %s" % (time.time() - started, what), 0)
 
 
+def plain_totals(events):
+    """(lane names, counts by exit class, spend, the spend's source) for a record with no
+    `run-open`. Every figure is read from the lane events alone, since they are the whole
+    record: the classes come from `lane-closed.exit_class`, the spend from those events'
+    `total_cost_usd`, and a lane opened but never closed is counted under `open`. Costs are
+    summed by reading each event, never by a pattern over the file."""
+    names, closed_names = set(), set()
+    by_exit, spend, priced, unpriced = {}, 0.0, 0, 0
+    for e in events:
+        kind, lane = e.get("event"), e.get("lane")
+        if kind not in ("lane-open", "lane-resumed", "lane-closed") or lane is None:
+            continue
+        names.add(str(lane))
+        if kind != "lane-closed":
+            continue
+        closed_names.add(str(lane))
+        cls = str(e.get("exit_class") or "unstated")
+        by_exit[cls] = by_exit.get(cls, 0) + 1
+        cost = e.get("total_cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            spend += float(cost)
+            priced += 1
+        else:
+            unpriced += 1
+    still_open = len(names - closed_names)
+    if still_open:
+        by_exit["open"] = by_exit.get("open", 0) + still_open
+    src = "sum of %d lane-closed total_cost_usd" % priced
+    if unpriced:
+        src += "; %d lane-closed carried no cost and are unpriced" % unpriced
+    return sorted(names), by_exit, round(spend, 2), src
+
+
+def close_plain(a, path, events):
+    """`close` on the plain-lane-run shape (the register entry of 2026-09-06, widened
+    2026-09-07): the `run-close` is written from the lane events alone.
+
+    No head meter — the record names no head session to meter; no hand-off rewrite — no
+    `run-open` names a pack; no hand-off row anywhere; and no commit and no push, since those
+    write the vault under a head's grant and this record carries no head. The event says its
+    own shape, so the console and the waste table can tell it from a hands-off close. The
+    heartbeat and supervisor markers are not written either: a plain lane run arms neither."""
+    if a.commit is not None or a.push:
+        die("a plain lane run's close never commits and never pushes (%s was given): the record "
+            "has no run-open, so no head's grant stands behind a vault write; nothing written"
+            % ("--commit" if a.commit is not None else "--push"))
+    names, by_exit, spend, src = plain_totals(events)
+    tally = " · ".join("%s %d" % (k, n) for k, n in sorted(by_exit.items())) or "none"
+    decisions = sum(1 for e in events if e.get("event") == "decision")
+    ev = event(a.run, "run-close", shape=PLAIN_SHAPE, lanes=len(names), lanes_by_exit=by_exit,
+               spend_usd=spend, spend_src=src, decisions_on_owner_behalf=decisions,
+               meter="none: a plain lane run names no head session to meter",
+               items=a.items, register=a.register, log=a.log, lint=a.lint)
+    if a.dry_run:
+        say("close: dry run · plain lane run (no run-open) · %s"
+            % json.dumps(ev, ensure_ascii=False))
+        say("close: lanes %d (%s) · spend $%.2f (%s) · would write no hand-off row, no commit, "
+            "no push" % (len(names), tally, spend, src))
+        return 0
+    append_record(path, ev)
+    say("close: %s · plain lane run (no run-open) · lanes %d (%s) · spend $%.2f (%s) · "
+        "decisions %d · no hand-off row, no commit, no push"
+        % (a.run, len(names), tally, spend, src, decisions))
+    return 0
+
+
 def cmd_close(a):
     path = record_path(a.run)
-    events = require_record(path)
+    events = read_existing_record(path)
+    if is_plain_run(events):
+        return close_plain(a, path, events)
     ro = run_open(events)
     ho = handoff_of(events, a.handoff)
     meter = meter_line(events, a.run, a.meter_line)
@@ -2804,6 +3767,7 @@ def cmd_close(a):
     append_record(path, ev)
     try:
         write_atomic(heartbeat_files(a.run)[1], now() + "\n")   # an armed heartbeat ends (D32)
+        write_atomic(supervisor_stop_file(a.run), now() + "\n")  # a sleeping supervisor ends (D43)
     except OSError as exc:
         note("heartbeat stop marker not written: %s" % exc)
     say("close: %s · lanes %d · decisions %d · gates %d%s%s%s" % (
@@ -2840,7 +3804,23 @@ LEGEND = ("Kinds are mechanical, never judged here: idle minutes and lost lanes 
           "lost-lane cost sums lanes closed other than `completed` and not resumed afterwards; "
           "rewrites are the change since the same head's previous boundary, a head's first "
           "boundary keeping the billed line's cumulative figure. A boundary written before "
-          "these meanings is quoted as recorded and its source cell says so." % IDLE_GAP_S)
+          "these meanings is quoted as recorded and its source cell says so. Field meanings "
+          "(2026-09-07): the over-cap row carries the CUT TAIL alone — the words above the "
+          "%d-word cap, converted at %s tokens per word, set by judgement, unmeasured, and "
+          "charged at the lane's model's output rate from prices.json — never the lane's whole "
+          "cost, and a report at or under the cap contributes nothing; a lane whose model the "
+          "record does not name is counted in words and left unpriced. The whole-run rows meter "
+          "each head over the RUN's window (run-open to run-close, else the record's last "
+          "event), so a session shared with attended work is not counted whole against this "
+          "run; where that meter gives no figure the row falls back to the later of the head's "
+          "last boundary billed line and its head-exit spend, and says which. A recorded limit "
+          "wait (stop-condition to head-resumed) has a structural row of its own, and an idle "
+          "row whose span covers one says how many of its minutes it holds. A `soft-cap` cell "
+          "is a lane billed over its soft line (`lane-closed.soft_exceeded`; `soft_src` says "
+          "whether the line was the class's completed maximum plus its headroom or the head's "
+          "own --expect-usd): the line is logged, never a stop, and the head ledgers it at the "
+          "lane's close." % (
+              IDLE_GAP_S, REPORT_CAP_WORDS, WORDS_TO_TOKENS))
 # What each of the three re-defined fields means on a given boundary, read off the marker
 # fields the boundary command writes beside them; a boundary written before the rule has none
 # and is labelled as recorded, never re-read under the new meaning.
@@ -2905,29 +3885,212 @@ def session_at(events, index):
     return sid if isinstance(sid, str) else None
 
 
+def output_rate(model):
+    """(rate in $ per MTok, family) for a model id, read from prices.json beside this script by
+    that file's own matching rule — the id lower-cased, the first family name it contains in the
+    file's stated order winning. (None, reason) where the file, the id or the family is missing:
+    the row then carries the words alone and says it is unpriced, never a guessed rate."""
+    path = os.path.join(HERE, "prices.json")
+    if not isinstance(model, str) or not model.strip():
+        return None, "the record names no model for this lane"
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            table = json.load(handle)
+    except (OSError, ValueError) as exc:
+        return None, "prices.json unreadable (%s)" % exc
+    order = table.get("family_order") or list(table.get("families") or {})
+    for family in order:
+        if family in model.lower():
+            rate = (table.get("families") or {}).get(family, {}).get("output")
+            if isinstance(rate, (int, float)) and not isinstance(rate, bool):
+                return float(rate), family
+            return None, "prices.json carries no output rate for %s" % family
+    return None, "the model %s matches no price family" % one_line(model)[:60]
+
+
+def lane_model(events, index, close):
+    """The model of the lane a lane-closed event names: the last lane-open for the same lane
+    before the close (the wrapper records the model there, not on the close), matched on the
+    lane session id too when both events carry one. None when no lane-open names one."""
+    for ev in reversed(events[:index]):
+        if ev.get("event") != "lane-open" or ev.get("lane") != close.get("lane"):
+            continue
+        a, b = ev.get("session_id"), close.get("session_id")
+        if a and b and a != b:
+            continue
+        return ev.get("model")
+    return None
+
+
+def cut_tail_rows(events, lo, hi):
+    """[(lane, words over the cap, cost or None, note)] for every lane-closed between the event
+    indices lo (exclusive) and hi (inclusive) whose report ran over the cap: the CUT TAIL alone
+    — `report_words` minus REPORT_CAP_WORDS, at WORDS_TO_TOKENS tokens per word, charged at the
+    lane's model's output rate — and never the lane's whole cost (T8, 2026-09-07). A report at
+    or under the cap contributes nothing."""
+    found = []
+    for i in range(max(0, lo + 1), min(hi + 1, len(events))):
+        ev = events[i]
+        if ev.get("event") != "lane-closed":
+            continue
+        words = ev.get("report_words")
+        if not isinstance(words, int) or isinstance(words, bool) or words <= REPORT_CAP_WORDS:
+            continue
+        over = words - REPORT_CAP_WORDS
+        model = lane_model(events, i, ev)
+        rate, why = output_rate(model)
+        if rate is None:
+            found.append((ev.get("lane") or "unnamed lane", over, None, "unpriced: %s" % why))
+            continue
+        cost = over * WORDS_TO_TOKENS / 1000000.0 * rate
+        found.append((ev.get("lane") or "unnamed lane", over, cost,
+                      "%s output $%.2f/MTok" % (why, rate)))
+    return found
+
+
+def cut_tail_text(found):
+    """The over-cap row's cut-tail cell: the priced tail with its derivation, or the statement
+    that nothing in the span ran over the cap."""
+    if not found:
+        return ("cut tail $0.00 · no report in this span ran over the %d-word cap"
+                % REPORT_CAP_WORDS)
+    priced = [c for _, _, c, _ in found if c is not None]
+    total = ("$%.2f" % sum(priced)) if priced else "unpriced"
+    parts = ["%s %d words over" % (lane, over) + (
+        " = $%.4f (%s)" % (cost, note) if cost is not None else " (%s)" % note)
+        for lane, over, cost, note in found]
+    return ("cut tail %s%s · the tail alone (report_words − %d), never the lane's whole cost: "
+            "%s · %s tokens per word, set by judgement, unmeasured" % (
+                total, "" if len(priced) == len(found) else " over the priced tail(s)",
+                REPORT_CAP_WORDS, "; ".join(parts), WORDS_TO_TOKENS))
+
+
+def limit_waits(events):
+    """[(stop-condition, head-resumed, minutes)] for every recorded limit stop the record shows
+    a head resumed from: the span between the two events. The limits ruling makes that wait a
+    cost of the chosen shape, so the table gives it a structural row of its own rather than
+    leaving it inside idle_min's real class (register entry 2026-09-06)."""
+    found = []
+    for i, ev in enumerate(events):
+        if ev.get("event") != "stop-condition":
+            continue
+        resumed = next((x for x in events[i + 1:] if x.get("event") == "head-resumed"), None)
+        if resumed is None:
+            continue
+        t0, t1 = parse_ts(ev.get("ts")), parse_ts(resumed.get("ts"))
+        if t0 is None or t1 is None or t1 < t0:
+            continue
+        found.append((ev, resumed, (t1 - t0) / 60.0))
+    return found
+
+
+def limit_wait_rows(events):
+    """One structural row per recorded limit wait; none where the record holds no such pair."""
+    rows = []
+    for stop, resumed, minutes in limit_waits(events):
+        rows.append(("limit wait · %s → head-resumed at %s"
+                     % (stop.get("which", "stop-condition"), resumed.get("ts", "no ts")),
+                     "%.1f min · stop-condition at %s to head-resumed at %s · a cost of the "
+                     "chosen shape (the limits ruling), not head idleness: a boundary whose "
+                     "span covers it counts the same minutes under idle_min"
+                     % (minutes, stop.get("ts", "no ts"), resumed.get("ts", "no ts")),
+                     "structural", FIX_NONE))
+    return rows
+
+
+def overlap_min(waits, t0, t1):
+    """The recorded limit-wait minutes inside a boundary's span, 0.0 when none overlap."""
+    if t0 is None or t1 is None:
+        return 0.0
+    total = 0.0
+    for stop, resumed, _ in waits:
+        a, b = parse_ts(stop.get("ts")), parse_ts(resumed.get("ts"))
+        if a is None or b is None:
+            continue
+        total += max(0.0, min(b, t1) - max(a, t0))
+    return total / 60.0
+
+
 def field_rows(events):
     """One row per waste field per phase-boundary event, each naming its event and, for the
-    three fields re-defined on 2026-09-06, what the figure means on that boundary."""
+    three fields re-defined on 2026-09-06, what the figure means on that boundary. The over-cap
+    row carries the cut tail's price (T8) and an idle row whose span covers a recorded limit
+    wait says how many of its minutes that wait holds (register entry 2026-09-06)."""
     rows = []
-    for ev in events:
+    waits = limit_waits(events)
+    previous = -1
+    for i, ev in enumerate(events):
         if ev.get("event") != "phase-boundary":
             continue
         label = boundary_label(ev)
+        t0 = parse_ts(events[previous].get("ts")) if 0 <= previous < len(events) else \
+            parse_ts(run_open(events).get("ts"))
+        waited = overlap_min(waits, t0, parse_ts(ev.get("ts")))
         for key, what, kind, unit in BOUNDARY_FIELDS:
             meaning = FIELD_MEANINGS[key](ev) if key in FIELD_MEANINGS else None
             source = "phase-boundary.%s · %s%s" % (key, "%s · " % meaning if meaning else "",
                                                    label)
             fig, finding = figure(ev.get(key, MISSING), unit, source)
+            measured = ev.get(key, MISSING) is not MISSING and ev.get(key) is not None
+            if key == "over_cap_reports" and measured:
+                fig = "%s · %s" % (fig, cut_tail_text(cut_tail_rows(events, previous, i)))
+            if key == "idle_min" and measured and waited > 0:
+                fig = ("%s · of which %.1f min is a recorded limit wait (stop-condition → "
+                       "head-resumed), structural rather than real" % (fig, waited))
             rows.append(("%s · %s" % (what, label), fig, kind,
                          FIX_OPEN if finding else FIX_NONE))
+        previous = i
     return rows
 
 
-def billed_rows(events):
-    """The billed line at every boundary, quoted as the meter printed it, and the run total as
-    a shown sum of the session figures (the last billed line of each head session, since a
-    session's meter line is cumulative). An unmetered or failed line is quoted, never zeroed."""
-    rows, per_session, order, quoted = [], {}, [], 0
+def head_totals(events, metered=None):
+    """[(sid, dollars or None, source)] — one entry per head session the table counts, in
+    record order. Each head's figure is, in order of preference: the meter's own reading over
+    the RUN's window when one was taken (T6, so a session shared with attended work is never
+    counted whole against this run), else the LATER of that head's last boundary billed line
+    and its head-exit's `spent_usd` — a head that exited without a boundary loses nothing
+    (register entry 2026-09-06). None where the record and the meter both give no figure."""
+    found = []
+    for sid in head_ids(events):
+        billed_i, billed, exit_i, spent = -1, None, -1, None
+        for i, ev in enumerate(events):
+            if session_at(events, i) != sid:
+                continue
+            if ev.get("event") == "phase-boundary" and isinstance(ev.get("meter"), str):
+                value = session_spent(ev["meter"])
+                if value is not None:
+                    billed_i, billed = i, value
+            elif ev.get("event") == "head-exit":
+                value = ev.get("spent_usd")
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    exit_i, spent = i, float(value)
+        if spent is not None and (billed is None or exit_i > billed_i):
+            record, why = spent, "head-exit.spent_usd $%.2f%s" % (
+                spent, ", later in the record than the last boundary billed line $%.2f" % billed
+                if billed is not None else ", the head recorded no boundary billed line")
+        elif billed is not None:
+            record, why = billed, "the last boundary billed line's `session $` $%.2f%s" % (
+                billed, ", later than head-exit.spent_usd $%.2f" % spent
+                if spent is not None else "")
+        else:
+            record, why = None, "no boundary billed line and no head-exit.spent_usd"
+        line = (metered or {}).get(sid)
+        window = session_spent(line) if isinstance(line, str) else None
+        if window is not None:
+            found.append((sid, window, "metered over the run's window: $%.2f (the record gives "
+                                       "%s)" % (window, why)))
+        else:
+            found.append((sid, record, "%s%s" % (why, "" if line is None else
+                                                 " · the window meter gave no figure: %s"
+                                                 % one_line(str(line))[:120])))
+    return found
+
+
+def billed_rows(events, metered=None):
+    """The billed line at every boundary, quoted as the meter printed it, and the whole-run
+    rows: a run total as a shown sum of the per-head figures head_totals derives, with the
+    envelope base beside it. An unmetered or failed line is quoted, never zeroed."""
+    rows, quoted = [], 0
     for i, ev in enumerate(events):
         if ev.get("event") != "phase-boundary":
             continue
@@ -2936,24 +4099,30 @@ def billed_rows(events):
         text = "field absent" if line is MISSING else cell(one_line(line))
         rows.append(("billed line · head %s · %s" % (sid, boundary_label(ev)), text, "billed",
                      FIX_NA))
-        total = session_spent(line) if isinstance(line, str) else None
-        if total is None:
+        if not (isinstance(line, str) and session_spent(line) is not None):
             quoted += 1
-            continue
-        if sid not in per_session:
-            order.append(sid)
-        per_session[sid] = total
-    if not rows:
+    totals = [(sid, usd, why) for sid, usd, why in head_totals(events, metered)
+              if usd is not None]
+    if not rows and not totals:
         return rows
-    if per_session:
-        shown = " + ".join("$%.2f" % per_session[s] for s in order)
-        fig = "%s = $%.2f · the `session $` figure of each head's last billed line (%s)%s" % (
-            shown, round(sum(per_session.values()), 2), ", ".join(order),
+    envelope = run_open(events).get("envelope_usd")
+    base = (" · envelope base $%.2f (run-open.envelope_usd)" % float(envelope)
+            if isinstance(envelope, (int, float)) and not isinstance(envelope, bool)
+            else " · no envelope base (run-open carries no envelope_usd)")
+    seeds = seed_sessions(events)
+    skipped = (" · seed (skipped): %s, marked seed by run-open and never a head"
+               % ", ".join(seeds) if seeds else "")
+    if totals:
+        shown = " + ".join("$%.2f" % usd for _, usd, _ in totals)
+        fig = "%s = $%.2f · per head: %s%s%s%s" % (
+            shown, round(sum(usd for _, usd, _ in totals), 2),
+            "; ".join("%s %s" % (sid, why) for sid, _, why in totals), base, skipped,
             "; %d boundary line(s) carried no session figure and are quoted above, never read "
             "as zero" % quoted if quoted else "")
     else:
-        fig = ("unmeasured · no boundary billed line carried a `session $` figure; the %d "
-               "line(s) are quoted above, never read as zero" % quoted)
+        fig = ("unmeasured · no boundary billed line carried a `session $` figure and no "
+               "head-exit recorded spend; the %d line(s) are quoted above, never read as "
+               "zero%s%s" % (quoted, base, skipped))
     rows.append(("run total (shown sum)", fig, "billed", FIX_NA))
     return rows
 
@@ -2990,15 +4159,31 @@ def head_spans(events):
     """[(session id, start, end)] for the head sessions the table counts, in record order. A
     span holding a head-exit that records no transcript is a session that never ran (see
     seed_exit) and is left out: counting it would put an `unmeasured` head in the table beside
-    the heads that did run."""
+    the heads that did run. A session `run-open --session-kind seed` marks is left out for the
+    same reason, on the record's own field rather than on the absence of a transcript (T7)."""
     starts = [i for i, e in enumerate(events) if e.get("event") in SESSION_EVENTS]
+    seeds = seed_sessions(events)
     spans = []
     for k, i in enumerate(starts):
         end = starts[k + 1] if k + 1 < len(starts) else len(events)
         if any(seed_exit(e) for e in events[i:end]):
             continue
-        spans.append((session_at(events, i + 1) or "unnamed head", i, end))
+        sid = session_at(events, i + 1) or "unnamed head"
+        if sid in seeds:
+            continue
+        spans.append((sid, i, end))
     return spans
+
+
+def head_ids(events):
+    """The distinct head session ids the table counts, in record order. One id however many
+    spans it holds: a head-successor and the run-resume that follows it name ONE session, and
+    counting spans read four heads for two ids (register entry 2026-09-06)."""
+    ids = []
+    for sid, _, _ in head_spans(events):
+        if sid not in ids:
+            ids.append(sid)
+    return ids
 
 
 def orientation_rows(events):
@@ -3043,17 +4228,43 @@ def orientation_rows(events):
     return [chosen[sid][0] for sid in order]
 
 
+def soft_cap_note(ev):
+    """` · soft-cap: $<billed> over $<soft>` for a close the wrapper flagged, else "". The
+    soft threshold is logged at the close and never stops a lane (lane.py's two-tier caps),
+    so the flag had no reader until this row (critic finding F4, 2026-09-07); the head ledgers
+    the line at the lane's close. A flag with no dollar figure beside it says `unmeasured`
+    rather than a number nobody recorded."""
+    if ev.get("soft_exceeded") is not True:
+        return ""
+    def money(value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return "unmeasured"
+        return "$%.2f" % float(value)
+    return " · soft-cap: %s over %s (%s)" % (money(ev.get("total_cost_usd")),
+                                             money(ev.get("soft_usd")),
+                                             ev.get("soft_src") or "class")
+
+
 def lane_rows(events):
     """Lost-lane cost: every lane-closed whose exit class is not `completed`, with the cost
     field as recorded and `unmeasured` where the event carries none. A cut lane that a later
     lane-resumed picked up again lost nothing: its row says so and carries no fix, matching
-    the boundary field's exclusion."""
+    the boundary field's exclusion. A close flagged `soft_exceeded` carries its soft-cap note
+    on the same row, and a COMPLETED lane so flagged — which has no row otherwise — gets one
+    of its own, arguable in kind: the money bought a result, and whether it was waste is the
+    reflector's call, not this table's."""
     rows = []
     for i, ev in enumerate(events):
         if ev.get("event") != "lane-closed":
             continue
         cls = ev.get("exit_class", MISSING)
+        note = soft_cap_note(ev)
         if cls == "completed":
+            if note:
+                rows.append(("soft-cap lane · %s · exit class completed"
+                             % (ev.get("lane") or "unnamed lane"),
+                             "%s · lane-closed.soft_exceeded · logged at the close, never a "
+                             "stop" % note.lstrip(" ·").strip(), "arguable", FIX_OPEN))
             continue
         lane = ev.get("lane") or "unnamed lane"
         stamped = "%s at %s" % (lane, ev.get("ts", "no ts"))
@@ -3061,7 +4272,7 @@ def lane_rows(events):
             rows.append(("lost lane · %s · exit class" % lane, "field absent", "real", FIX_NONE))
             continue
         fig, finding = figure(ev.get("total_cost_usd", MISSING), "usd",
-                              "lane-closed.total_cost_usd · %s" % stamped)
+                              "lane-closed.total_cost_usd · %s%s" % (stamped, note))
         resumed = resumed_after(events[i + 1:], ev)
         if resumed is not None:
             rows.append(("cut lane · %s · exit class %s · resumed" % (lane, cls),
@@ -3073,21 +4284,24 @@ def lane_rows(events):
     return rows
 
 
-def waste_table(events, run, path, bad):
-    """(text, rows, counts): the whole document, rendered from the record and nothing else."""
+def waste_table(events, run, path, bad, metered=None):
+    """(text, rows, counts): the whole document, rendered from the record and — for the
+    whole-run rows alone — the meter's reading of each head over the run's own window, which
+    the caller takes and passes in (T6). Every other figure is read from a field."""
     boundaries = [e for e in events if e.get("event") == "phase-boundary"]
     gates = [e for e in events if e.get("event") == "gate"]
     lanes = [e for e in events if e.get("event") == "lane-closed"]
     lost = [e for e in lanes if e.get("exit_class", MISSING) != "completed"]
-    heads = head_spans(events)   # a session that left no transcript never ran and is not one
+    heads = head_ids(events)   # distinct ids: a session that never ran is not a head
     rows = []
     if not boundaries:
         rows.append(("phase-boundary events", "no phase-boundary events · the waste fields and "
                      "the billed lines are read from these events", "control", FIX_NA))
     rows += field_rows(events)
-    rows += billed_rows(events)
+    rows += billed_rows(events, metered)
     rows += context_rows(events)
     rows += orientation_rows(events)
+    rows += limit_wait_rows(events)
     rows += lane_rows(events)
     if not any(row[3] == FIX_OPEN for row in rows):
         rows.append(("no waste found", "searched: %d phase-boundary event(s) for %s; %d "
@@ -3096,18 +4310,28 @@ def waste_table(events, run, path, bad):
                      % (len(boundaries), ", ".join(k for k, _, _, _ in BOUNDARY_FIELDS),
                         len(lanes), len(gates)),
                      "control", "n/a · the zero-findings control names what was searched"))
+    _, _, window_src = run_window(events)
+    seeds = seed_sessions(events)
     header = [
         "# Waste table · run %s" % run,
         "",
         "Step 2b of the reflect skill, rendered by `handsoff.py waste-table` from the run "
-        "record alone: every figure is read from a field, none is recalled, and no meter was "
-        "run (hands-off design D36).",
+        "record: every figure but the whole-run rows is read from a field, none is recalled, "
+        "and the only meter call is the one those rows name (hands-off design D36; T6 of the "
+        "token-efficiency findings, 2026-09-07).",
         "Record: %s" % path,
         "Rendered: %s" % now(),
         "Events read: %d phase-boundary%s, %d gate, %d lane-closed (%d not completed), %d head "
         "session(s)%s." % (len(boundaries), " (no phase-boundary events)" if not boundaries
                            else "", len(gates), len(lanes), len(lost), len(heads),
                            "; %d unparseable line(s) skipped" % bad if bad else ""),
+        "Head sessions are counted by DISTINCT session id (%s): a head-successor and the "
+        "run-resume that follows it are one session, not two." % (", ".join(heads) or "none"),
+        "Run window for the whole-run rows: %s." % window_src,
+        "seed (skipped): %s." % ("%s — marked `session_kind: seed` by run-open, a launcher's "
+                                 "placeholder that never ran, so it is neither metered nor "
+                                 "counted as a head session" % ", ".join(seeds) if seeds else
+                                 "none — no run-open in this record marks a seed session"),
         "Legend: %s" % LEGEND,
         "",
         "## Waste table",
@@ -3120,13 +4344,43 @@ def waste_table(events, run, path, bad):
     return "\n".join(header + body) + "\n", rows, counts
 
 
+def meter_overrides(pairs):
+    """{session id: billed line} from `--meter-line SID=LINE` (repeatable): a line already in
+    hand for one head, so the whole-run rows can be rendered without running the meter."""
+    found = {}
+    for pair in pairs or []:
+        sid, sep, line = pair.partition("=")
+        if not sep or not sid.strip() or not line.strip():
+            die("--meter-line takes SID=LINE; got %s" % one_line(pair)[:80])
+        found[sid.strip()] = line.strip()
+    return found
+
+
+def metered_heads(events, run, no_meter=False, overrides=None):
+    """{session id: billed line or its failure} for every head session the table counts, each
+    metered over the RUN's own window (T6). `no_meter` renders from the record alone, which is
+    what a caller with no transcripts to read passes; an override stands in for the meter."""
+    overrides = overrides or {}
+    if no_meter and not overrides:
+        return {}
+    start, end, _ = run_window(events)
+    found = {}
+    for sid in head_ids(events):
+        if sid in overrides:
+            found[sid] = overrides[sid]
+        elif not no_meter:
+            found[sid] = meter_line(events, run, None, start, end, sid)
+    return found
+
+
 def cmd_waste_table(a):
     path = record_path(a.run)
     events = require_record(path)
     bad = read_record(path)[1]
     out_path = (os.path.realpath(os.path.expanduser(a.out)) if a.out else
                 os.path.join(store_root(), "spawn-records", "%s-waste-table.md" % a.run))
-    text, _, counts = waste_table(events, a.run, path, bad)
+    metered = metered_heads(events, a.run, a.no_meter, meter_overrides(a.meter_line))
+    text, _, counts = waste_table(events, a.run, path, bad, metered)
     summary = "%d rows from %d boundaries, %d gates, %d lanes" % (
         counts["rows"], counts["boundaries"], counts["gates"], counts["lanes"])
     if a.dry_run:
@@ -3172,6 +4426,40 @@ NOTIFICATION_RES = (
 )
 
 
+# An assistant record's tool calls carried into the extraction (register entry 2026-09-07): the
+# call, never its result — the tool_result exclusion above stands, so the reflector reads what
+# the head DID and not what came back. One line per call: the tool's name and the input field
+# that says what it acted on, each line cut at TOOL_CALL_CHARS characters (set by the head as a
+# bound on one line, unmeasured; a cut line ends with the marker so the cut is visible). A tool
+# outside the table prints its name alone rather than a guessed field.
+TOOL_CALL_CHARS = 300
+TOOL_CALL_CUT = " …[cut]"
+TOOL_ARG_KEYS = {"Bash": ("command",), "Read": ("file_path",), "Write": ("file_path",),
+                 "Edit": ("file_path",), "Grep": ("pattern",), "Glob": ("pattern",)}
+
+
+def tool_call_line(block):
+    """`- <tool>: <what it acted on>` for one tool_use block, or `- <tool>` where the tool is
+    not in the table above or its input carries none of that tool's fields. Cut at
+    TOOL_CALL_CHARS characters, the cut marked."""
+    name = str(block.get("name") or "tool")
+    data = block.get("input") if isinstance(block.get("input"), dict) else {}
+    value = ""
+    for key in TOOL_ARG_KEYS.get(name, ()):
+        if data.get(key) not in (None, ""):
+            value = one_line(str(data[key]))
+            break
+    line = "- %s: %s" % (name, value) if value else "- %s" % name
+    if len(line) > TOOL_CALL_CHARS:
+        line = line[:TOOL_CALL_CHARS - len(TOOL_CALL_CUT)] + TOOL_CALL_CUT
+    return line
+
+
+def tool_call_lines(blocks):
+    """The tool-call lines of one assistant record, in the order the record holds them."""
+    return [tool_call_line(b) for b in blocks if b.get("type") == "tool_use"]
+
+
 def blocks_of(message):
     content = message.get("content")
     if isinstance(content, list):
@@ -3207,15 +4495,18 @@ def replay_tail(text):
 
 
 def extract_turns(lane, path, extra):
-    """(turns, counts) from a transcript: human turns and assistant prose in file order, with
-    the tool results and the two injected user-record classes counted out. An unparseable line
-    is counted, never fatal. An assistant record carrying only tool calls is not a turn and
-    carries no exclusion class, which the extraction's own header says. A resume replay keeps
-    its trailing owner message alone and a synthetic assistant record is skipped: `replay`
-    counts the records recognised (the trimmed ones are still human turns), `synthetic` the
-    records dropped."""
+    """(turns, counts) from a transcript: human turns, assistant prose and the assistant's tool
+    calls in file order, with the tool results and the two injected user-record classes counted
+    out. An unparseable line is counted, never fatal. An assistant record carrying only tool
+    calls is a tool-call turn — one line per call, the call and never its result — counted under
+    `tool_call_turns` rather than excluded, so records = extracted + tool_call_turns + every
+    exclusion (register entry 2026-09-07). A record carrying both prose and tool calls keeps its
+    prose turn and the lines go under it, so the turn count still matches the head's messages. A
+    resume replay keeps its trailing owner message alone and a synthetic assistant record is
+    skipped: `replay` counts the records recognised (the trimmed ones are still human turns),
+    `synthetic` the records dropped."""
     turns = []
-    counts = {"records": 0, "human_turns": 0, "assistant_turns": 0,
+    counts = {"records": 0, "human_turns": 0, "assistant_turns": 0, "tool_call_turns": 0,
               "excluded": {"tool_result": 0, "meta": 0, "notification": 0, "replay": 0,
                            "synthetic": 0, "unparseable": 0}}
     out = counts["excluded"]
@@ -3260,11 +4551,15 @@ def extract_turns(lane, path, extra):
                     out["synthetic"] += 1   # the harness's stop record, never the head's prose
                     continue
                 prose = turn_text(lane, blocks)
-                if not prose:
-                    continue
-                counts["assistant_turns"] += 1
-                turns.append(("assistant", stamp, prose))
-    counts["extracted"] = len(turns)
+                calls = tool_call_lines(blocks)
+                if prose:
+                    counts["assistant_turns"] += 1
+                    body = prose + ("\n\nTool calls:\n" + "\n".join(calls) if calls else "")
+                    turns.append(("assistant", stamp, body))
+                elif calls:
+                    counts["tool_call_turns"] += 1
+                    turns.append(("assistant · tool calls", stamp, "\n".join(calls)))
+    counts["extracted"] = counts["human_turns"] + counts["assistant_turns"]
     return turns, counts
 
 
@@ -3285,11 +4580,17 @@ def extraction_text(sid, path, turns, counts):
         "were trimmed to the text after their last `User:` marker, which is the turn the owner "
         "typed; a replay with no owner message left is dropped and counted here too." %
         out["replay"],
-        "An assistant record carrying only tool calls is not a turn and carries no exclusion "
-        "class, so the records do not sum to the turns.",
-        "Read %d of %d records as turns (%d human, %d assistant)." % (
+        "An assistant record carrying only tool calls is a tool-call turn, headed `assistant · "
+        "tool calls`: one line per call with the tool's name and the input field naming what it "
+        "acted on, each line cut at %d characters. The calls are carried, never their results, "
+        "so the tool-result exclusion above stands. A record carrying both prose and tool calls "
+        "keeps its prose turn and its lines go under it." % TOOL_CALL_CHARS,
+        "Read %d of %d records as turns (%d human, %d assistant), and %d record(s) of tool "
+        "calls alone. Records = %d extracted + %d tool-call + %d excluded = %d." % (
             counts["extracted"], counts["records"], counts["human_turns"],
-            counts["assistant_turns"]),
+            counts["assistant_turns"], counts["tool_call_turns"], counts["extracted"],
+            counts["tool_call_turns"], sum(out.values()),
+            counts["extracted"] + counts["tool_call_turns"] + sum(out.values())),
         "",
     ]
     body = []
@@ -3327,7 +4628,8 @@ def write_extraction(lane, sid, path, out_dir, extra):
     counts["session"] = sid
     payload = {"session": sid, "records": counts["records"],
                "human_turns": counts["human_turns"],
-               "assistant_turns": counts["assistant_turns"], "excluded": counts["excluded"],
+               "assistant_turns": counts["assistant_turns"],
+               "tool_call_turns": counts["tool_call_turns"], "excluded": counts["excluded"],
                "extracted": counts["extracted"]}
     try:
         write_atomic(os.path.join(out_dir, "turns.md"),
@@ -3350,9 +4652,11 @@ def cmd_extract_transcript(a):
     out_dir = (os.path.realpath(os.path.expanduser(a.out)) if a.out
                else os.path.join("/tmp", "aimyth-extract-%s" % sid))
     counts = write_extraction(lane, sid, path, out_dir, extra)
-    say("extract-transcript: %d turns (%d human, %d assistant) of %d records · %s → %s"
+    say("extract-transcript: %d turns (%d human, %d assistant) of %d records · %d tool-call "
+        "turn(s) · %s → %s"
         % (counts["extracted"], counts["human_turns"], counts["assistant_turns"],
-           counts["records"], excluded_text(counts["excluded"]), out_dir))
+           counts["records"], counts["tool_call_turns"], excluded_text(counts["excluded"]),
+           out_dir))
     return 0
 
 
@@ -3413,18 +4717,22 @@ def cmd_reflect_inputs(a):
             _, counts = extract_turns(lane, tpath, extra)
         except OSError as exc:
             die("cannot read the transcript %s: %s" % (tpath, exc))
-        _, _, wcounts = waste_table(events, a.run, path, bad)
+        _, _, wcounts = waste_table(events, a.run, path, bad,
+                                    metered_heads(events, a.run, a.no_meter,
+                                                  meter_overrides(a.meter_line)))
         kept, dropped, stripped = blinded_events(events)
         say("reflect-inputs: dry run · %d turns (%d human, %d assistant) of %d records · %d "
-            "waste row(s) · %d event(s) kept, %d controls observation(s) dropped, %d stripped "
-            "of %s · would write turns.md, counts.json, waste-table.md and "
+            "tool-call turn(s) · %d waste row(s) · %d event(s) kept, %d controls observation(s) "
+            "dropped, %d stripped of %s · would write turns.md, counts.json, waste-table.md and "
             "record-filtered.jsonl under %s and append one reflect-inputs event"
             % (counts["extracted"], counts["human_turns"], counts["assistant_turns"],
-               counts["records"], wcounts["rows"], len(kept), dropped, stripped,
-               "/".join(BLINDED_KEYS), out_dir))
+               counts["records"], counts["tool_call_turns"], wcounts["rows"], len(kept),
+               dropped, stripped, "/".join(BLINDED_KEYS), out_dir))
         return 0
     counts = write_extraction(lane, sid, tpath, out_dir, extra)
-    text, _, wcounts = waste_table(events, a.run, path, bad)
+    text, _, wcounts = waste_table(events, a.run, path, bad,
+                                   metered_heads(events, a.run, a.no_meter,
+                                                 meter_overrides(a.meter_line)))
     kept, dropped, stripped = blinded_events(events)
     try:
         write_atomic(os.path.join(out_dir, "waste-table.md"), text)
@@ -3433,17 +4741,19 @@ def cmd_reflect_inputs(a):
     except OSError as exc:
         die("cannot write the reflection inputs under %s: %s" % (out_dir, exc))
     summary = {"turns": counts["extracted"], "human_turns": counts["human_turns"],
-               "assistant_turns": counts["assistant_turns"], "records": counts["records"],
+               "assistant_turns": counts["assistant_turns"],
+               "tool_call_turns": counts["tool_call_turns"], "records": counts["records"],
                "waste_rows": wcounts["rows"], "events_kept": len(kept),
                "controls_dropped": dropped, "events_stripped": stripped}
     append_record(path, event(a.run, "reflect-inputs", session=sid, out=out_dir,
                               counts=summary))
-    say("reflect-inputs: %d turns (%d human, %d assistant) of %d records · %d waste row(s) · "
-        "%d event(s) kept, %d controls observation(s) dropped, %d stripped of %s → %s"
+    say("reflect-inputs: %d turns (%d human, %d assistant) of %d records · %d tool-call turn(s) "
+        "· %d waste row(s) · %d event(s) kept, %d controls observation(s) dropped, %d stripped "
+        "of %s → %s"
         % (summary["turns"], summary["human_turns"], summary["assistant_turns"],
-           summary["records"], summary["waste_rows"], summary["events_kept"],
-           summary["controls_dropped"], summary["events_stripped"], "/".join(BLINDED_KEYS),
-           out_dir))
+           summary["records"], summary["tool_call_turns"], summary["waste_rows"],
+           summary["events_kept"], summary["controls_dropped"], summary["events_stripped"],
+           "/".join(BLINDED_KEYS), out_dir))
     return 0
 
 
@@ -3467,6 +4777,16 @@ def main():
                        help="a read grant (repeatable); the defaults are always present")
         p.add_argument("--write", action="append", default=[], metavar="PATH",
                        help="a write grant (repeatable); the store and the state directory are always present")
+        p.add_argument("--on-limit", choices=ON_LIMIT_VALUES, default=None,
+                       help="the limit gate (D42, the pre-flight's class L): stop (the default: "
+                            "the supervisor stands down on a limit, the hand-off is the recovery) "
+                            "or resume (the pre-flight's limit-off: sleep to the reset, then "
+                            "resume); absent, the file's own value is carried forward")
+        p.add_argument("--viewer", choices=VIEWER_VALUES, default=None,
+                       help="the console window (the pre-flight's viewer key): terminal (the "
+                            "default: run-open opens a Terminal window on `watch --run R`, and "
+                            "successor and resume-head open one when none is alive) or none; "
+                            "absent, the file's own value is carried forward")
         return p
 
     def supervision(p):
@@ -3495,6 +4815,10 @@ def main():
     p.add_argument("--detail", required=True)
     p.add_argument("--pid", type=int, default=None, help="the head's pid (default: parent walk)")
     p.add_argument("--envelope-usd", type=float, default=None)
+    p.add_argument("--session-kind", choices=SESSION_KINDS, default="head",
+                   help="seed: a launcher's placeholder session that never runs, written as "
+                        "session_kind on the run-open event; the waste table and the meter skip "
+                        "it rather than reading it as a head that spent nothing (default: head)")
     grants(p)
 
     p = common(sub.add_parser("run-resume", help="a later head records itself"), handoff=False)
@@ -3516,15 +4840,28 @@ def main():
     p.add_argument("--saving", default=None)
     p.add_argument("--meter-line", default=None, help="a billed line already in hand (skips the meter)")
 
-    p = common(sub.add_parser("ledger", help="one findings-ledger row plus an observation"))
-    p.add_argument("--phase", required=True)
-    p.add_argument("--what", required=True)
-    p.add_argument("--evidence", required=True)
-    p.add_argument("--routing", required=True)
+    p = common(sub.add_parser("ledger", help="one findings-ledger row plus an observation, or "
+                                             "--observation alone on any record"))
+    # The four are required together (cmd_ledger refuses a partial set by name); they are not
+    # argparse-required, because --observation is a complete call on its own.
+    p.add_argument("--phase", default=None)
+    p.add_argument("--what", default=None)
+    p.add_argument("--evidence", default=None)
+    p.add_argument("--routing", default=None)
+    p.add_argument("--observation", default=None, metavar="WHAT",
+                   help="append one observation event and NO hand-off row, to any record that "
+                        "exists: the form a record with no run-open (a plain lane run) takes, "
+                        "and a head's aside on a record that has one. --phase is optional")
 
-    p = common(sub.add_parser("gate", help="band check before an item"), handoff=False)
+    p = common(sub.add_parser("gate", help="band and envelope check before an item: exit 4 on "
+                                           "the band stop, 5 on the envelope stop (the run's "
+                                           "spend has reached run-open's envelope_usd), 7 on "
+                                           "the second consecutive unmetered gate"),
+               handoff=False)
     p.add_argument("--to", required=True, metavar="ITEM")
     p.add_argument("--phase", default="", help="for the observation on an unmetered gate")
+    p.add_argument("--meter-line", default=None,
+                   help="a billed line in hand for the envelope remainder (skips the meter)")
 
     p = common(sub.add_parser("handoff", help="rewrite named sections or bullets; --final records head-exit"))
     p.add_argument("--inflight", default=None)
@@ -3572,11 +4909,28 @@ def main():
     p.add_argument("--out", default=None, help="the head's .out (default: the record's, else the newest, else none)")
     p.add_argument("--budget-usd", type=float, default=None, help="the cap in hand when the meter cannot size the remainder")
     p.add_argument("--wait-s", type=int, default=STARTER_WAIT_S, help="how long a head-exit may wait for its head-successor")
+    p.add_argument("--stop", action="store_true",
+                   help="write the supervisor's stop marker and exit: a sleeping supervisor stands down at its next tick (D43)")
     supervision(p)
 
     p = common(sub.add_parser("_supervise", help="internal: the detached supervisor"))
     head_options(p)
     p.add_argument("--pid", type=int, required=True)
+    p.add_argument("--session", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--budget-usd", type=float, default=None)
+    p.add_argument("--wait-s", type=int, default=STARTER_WAIT_S)
+    supervision(p)
+
+    p = common(sub.add_parser("resume-head", help="after a limit the run stood down on (D42): resume the record's last head in place — armed, evented, supervised; detaches at once"))
+    head_options(p)
+    p.add_argument("--out", default=None, help="the head's .out (default: the record's, else the newest)")
+    p.add_argument("--budget-usd", type=float, default=None, help="the cap in hand when the meter cannot size the remainder")
+    p.add_argument("--wait-s", type=int, default=STARTER_WAIT_S)
+    supervision(p)
+
+    p = common(sub.add_parser("_resume-head", help="internal: the detached resume-head"))
+    head_options(p)
     p.add_argument("--session", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--budget-usd", type=float, default=None)
@@ -3606,10 +4960,21 @@ def main():
     p.add_argument("--lane", default="", help="the lane the limit stopped, for the stop-condition event")
     p.add_argument("--harness-bin", default=HARNESS)
 
+    def window_meter(p):
+        p.add_argument("--no-meter", action="store_true",
+                       help="render the whole-run rows from the record alone: no meter call "
+                            "(the pre-2026-09-07 behaviour, for a caller with no transcripts)")
+        p.add_argument("--meter-line", action="append", default=[], metavar="SID=LINE",
+                       help="a billed line already in hand for one head session (repeatable), "
+                            "used in place of metering that head over the run's window")
+        return p
+
     p = common(sub.add_parser("waste-table", help="render Step 2b's waste table from the run "
-                              "record alone (D36)"), handoff=False)
+                              "record, the whole-run rows metered over the run's window (D36)"),
+               handoff=False)
     p.add_argument("--out", default=None, metavar="PATH",
                    help="default: <store>/spawn-records/<run>-waste-table.md")
+    window_meter(p)
 
     p = sub.add_parser("extract-transcript", help="the head's own transcript extracted for a "
                        "reflector lane: human turns and assistant prose (D36)")
@@ -3621,6 +4986,19 @@ def main():
     p.add_argument("--notification-re", action="append", default=[], metavar="REGEX",
                    help="an extra injected-user-record marker, matched at the start (repeatable)")
 
+    p = sub.add_parser("watch", help="the read-only console: --run for a hands-off run (header, "
+                       "items, lanes, timeline, feed) or --session for an attended session's "
+                       "background jobs; q quits, r resumes a stopped head (writes only the "
+                       "timeline report at the close, and the per-suite totals cache)")
+    what = p.add_mutually_exclusive_group(required=True)
+    what.add_argument("--run")
+    what.add_argument("--session", metavar="SID",
+                      help="a transcript stem, or a unique prefix of one: the background-job view")
+    p.add_argument("--once", action="store_true")
+    p.add_argument("--plain", action="store_true")
+    p.add_argument("--no-notify", action="store_true")
+    p.add_argument("--refresh", type=float, default=None)
+    p.add_argument("--vault", default=None)
     p = sub.add_parser("reflect-inputs", help="the P4 boundary reflection's whole input set in "
                        "one directory for a blind reflector lane (D36)")
     p.add_argument("--run", required=True, help="run id (the record's file stem)")
@@ -3634,6 +5012,7 @@ def main():
                    help="an extra injected-user-record marker, matched at the start (repeatable)")
     p.add_argument("--dry-run", action="store_true",
                    help="print the counts and what would be written; write and record nothing")
+    window_meter(p)
 
     p = common(sub.add_parser("close", help="final meter, run-close, commit and push on grant"))
     p.add_argument("--commit", default=None, metavar="MSG")
@@ -3650,11 +5029,12 @@ def main():
                 "ledger": cmd_ledger, "gate": cmd_gate, "handoff": cmd_handoff,
                 "successor": cmd_successor, "_starter": cmd_starter,
                 "supervise": cmd_supervise, "_supervise": cmd_supervise_internal,
+                "resume-head": cmd_resume_head, "_resume-head": cmd_resume_head_internal,
                 "heartbeat": cmd_heartbeat, "grants": cmd_grants,
                 "wait-reset": cmd_wait_reset, "close": cmd_close,
                 "waste-table": cmd_waste_table,
                 "extract-transcript": cmd_extract_transcript,
-                "reflect-inputs": cmd_reflect_inputs}
+                "reflect-inputs": cmd_reflect_inputs, "watch": cmd_watch}
     sys.exit(handlers[a.cmd](a) or 0)
 
 

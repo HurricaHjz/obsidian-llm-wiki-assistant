@@ -397,43 +397,159 @@ def cut_glob(path):
     return path[:slash + 1] if slash >= 0 else path
 
 
-def read_tokens(text):
-    """Every path token the read checks (3 and 4) test: each quoted string that `quoted_kind`
-    calls a path, whole and with its glob part cut, plus `tokens_of` over what is left when the
-    quoted strings are removed. An interpreter's program argument (`sh -c '…'`) is not quoted
-    payload but a command line, so its content is kept and tokenised as though it were one."""
-    if carries_interpreter_payload(text):
-        return tokens_of(text)
+# N11 (register, 2026-09-06): the PATTERN position of a pattern-taking command. A quoted string
+# standing there is what the command searches for, never a file it reads, whatever its content
+# looks like: `grep -v "/log.md:"` was denied live as a read of `/log.md:`, and `slash_pattern`
+# cannot help, since a bare `/x` has no closing delimiter. Keyed on the token's position in the
+# command's own grammar — the first operand after the flags, unless a flag already supplied the
+# pattern or the program (`-e`, `-f` and their long forms), in which case every operand is a file.
+# Only a QUOTED token is exempted: an unquoted pattern keeps today's reading, so the change is
+# confined to the false-deny class measured.
+PATTERN_COMMANDS = {"grep": "grep", "egrep": "grep", "fgrep": "grep", "zgrep": "grep",
+                    "awk": "awk", "gawk": "awk", "mawk": "awk", "nawk": "awk", "sed": "sed"}
+# Per family: the short letters that take a value (the glued tail or the next token is then no
+# operand), the letters that SUPPLY the pattern or program (no positional pattern remains), and
+# the long options of each kind. `-E` is a value flag for gawk (--exec) and a plain switch for
+# grep and sed, which is why the tables are per family rather than shared.
+PATTERN_FLAGS = {
+    "grep": {"value": set("efmABCdD"), "supply": set("ef"),
+             "value_long": {"--regexp", "--file", "--max-count", "--after-context",
+                            "--before-context", "--context", "--directories", "--devices",
+                            "--include", "--exclude", "--exclude-dir", "--exclude-from",
+                            "--label", "--binary-files", "--group-separator"},
+             "supply_long": {"--regexp", "--file"}},
+    "awk":  {"value": set("fFvWeiIlE"), "supply": set("feE"),
+             "value_long": {"--file", "--field-separator", "--assign", "--source", "--include",
+                            "--load", "--exec"},
+             "supply_long": {"--file", "--source", "--exec"}},
+    "sed":  {"value": set("efl"), "supply": set("ef"),
+             "value_long": {"--expression", "--file", "--line-length"},
+             "supply_long": {"--expression", "--file"}},
+}
+# An interpreter's program flag as ONE shell word: `-c`, `-Bc`, `-e`, or the flag glued to its
+# quoted program (`-c"..."`). The same shape INTERPRETER_FLAG reads out of running text.
+INTERPRETER_TOKEN = re.compile(r"^-[A-Za-z]*[ceE](['\"]|$)")
+
+
+def segment_command(words):
+    """(index, basename) of a segment's command word, past leading assignments and prefix words;
+    (None, None) for a segment made of those alone."""
+    index = 0
+    while index < len(words):
+        word = unquote_token(words[index]).strip()
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word) or word in PREFIXES:
+            index += 1
+            continue
+        return index, os.path.basename(word.rstrip(os.sep))
+    return None, None
+
+
+def interpreter_segment(words):
+    """True when THIS segment invokes an interpreter with a program flag (`sh -c`, `python3 -c`,
+    `perl -e`): its quoted argument is a command line, so the read checks keep its content and
+    the pre-D33 behaviour — a denial — stands for it. Decided per segment (N11): the whole-line
+    form read `grep -c` in one segment against `python3` in another as an interpreter payload,
+    tokenised every quoted string of the line and denied an awk pattern as a path (register,
+    2026-09-06, case G). A program passed WITHOUT such a flag (an awk or sed script) is payload
+    like any other quoted string: the fence cannot decide it, and that residue is named in the
+    docstring."""
+    index, base = segment_command(words)
+    if base not in INTERPRETERS:
+        return False
+    return any(INTERPRETER_TOKEN.match(word) for word in words[index + 1:])
+
+
+def carries_interpreter_payload(text):
+    """True when any segment of the text is an interpreter segment (kept for callers of the
+    whole-text form; the read checks decide per segment)."""
+    return any(interpreter_segment(words) for words in shell_segments(text))
+
+
+def pattern_operand(words):
+    """The index of the quoted token standing in the PATTERN position of a pattern-taking command
+    (N11), else None: the first operand after the flags, read as the command reads them (a
+    value-taking letter consumes its glued tail or the next token; `--` ends the flags; a
+    redirection and its target belong to check 2). None as soon as a flag supplied the pattern or
+    the program, since every operand is then a file the command reads. Only a quoted token
+    qualifies: `grep -v "/log.md:"` is the case; `grep -v /log.md:` keeps today's reading."""
+    index, base = segment_command(words)
+    family = PATTERN_COMMANDS.get(base)
+    if family is None:
+        return None
+    flags = PATTERN_FLAGS[family]
+    i, end_of_flags = index + 1, False
+    while i < len(words):
+        raw = words[i]
+        i += 1
+        if raw[:1] in "<>":
+            if "&" not in raw and i < len(words):
+                i += 1                        # the redirection's target
+            continue
+        word = unquote_token(raw).strip()
+        if not word:
+            continue
+        if not end_of_flags and word == "--":
+            end_of_flags = True
+            continue
+        if not end_of_flags and word.startswith("-") and word != "-":
+            if word.startswith("--"):
+                name, sep, _ = word.partition("=")
+                if name in flags["supply_long"]:
+                    return None
+                if not sep and name in flags["value_long"]:
+                    i += 1
+                continue
+            for position in range(1, len(word)):
+                letter = word[position]
+                if letter in flags["supply"]:
+                    return None
+                if letter in flags["value"]:
+                    if position + 1 >= len(word):
+                        i += 1                # the value is the next token
+                    break
+            continue
+        return i - 1 if raw[:1] in "'\"" else None
+    return None
+
+
+def quoted_tokens(word):
+    """The read-side reading of ONE shell word (D33, N1, N9, N9c): each quoted span that
+    `quoted_kind` calls a path, whole and with its glob part cut; a `$`-led span with the text
+    GLUED to it dropped as one token the fence cannot expand — `"$V"/wiki` is the same argument
+    as `"$V/wiki"` and as the bare `$V/wiki`, both of which pass, and emitting the tail alone
+    made `/wiki` an absolute token of its own and denied a lane's read-only grep (N9c); and
+    `tokens_of` over what is left when the quoted spans are removed."""
     paths = []
 
     def replace(match):
         content, glued = match.group(1)[1:-1], match.group(2)
         kind = quoted_kind(content)
         if kind == "path" and content.startswith("$"):
-            # N9c: a `$`-led quoted string is one path token the fence cannot expand, and the text
-            # GLUED to it belongs to that token: `"$V"/wiki` is the same argument as `"$V/wiki"`
-            # and as the bare `$V/wiki`, both of which already pass. Emitting the tail on its own
-            # made `/wiki` an absolute token of its own and denied a lane's own read-only grep.
             return " "
         if kind == "path":
             paths.append(cut_glob(content))
         return " %s " % glued if glued else " "
-    rest = QUOTED_WORD.sub(replace, text)
+    rest = QUOTED_WORD.sub(replace, word)
     return paths + tokens_of(rest)
 
 
-def carries_interpreter_payload(text):
-    """True when the text invokes an interpreter with a program argument (`sh -c`, `python3 -c`,
-    `perl -e`). Its quoted argument is a command line, so the read checks keep its content and the
-    pre-D33 behaviour — a denial — stands for it. A program passed WITHOUT such a flag (an awk or
-    sed script) is payload like any other quoted string: the fence cannot decide it, and that
-    residue is named in the docstring."""
-    if not INTERPRETER_FLAG.search(text):
-        return False
-    for word in command_words(text):
-        if os.path.basename(word.rstrip(os.sep)) in INTERPRETERS:
-            return True
-    return False
+def read_tokens(text):
+    """Every path token the read checks (3 and 4) test, read segment by segment from the same
+    quote-aware tokens the mutator scan uses (`shell_segments`, N11), so a quote is paired within
+    its own word and never across another segment's prose. An interpreter segment's program
+    argument (`sh -c '…'`) is a command line, not quoted payload, so that segment's content is
+    tokenised as though it were one; in every other segment the quoted token in a pattern-taking
+    command's pattern position is payload, and each remaining word is read by `quoted_tokens`."""
+    tokens = []
+    for words in shell_segments(text):
+        if interpreter_segment(words):
+            tokens += tokens_of(" ".join(words))
+            continue
+        skip = pattern_operand(words)
+        for index, word in enumerate(words):
+            if index != skip:
+                tokens += quoted_tokens(word)
+    return tokens
 
 
 def tokens_of(command):

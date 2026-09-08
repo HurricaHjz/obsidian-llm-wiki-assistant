@@ -4,7 +4,7 @@ What `export_template.sh` produces in `template-export/` (and what the public re
 
 ## Final file tree (publishable repo)
 ```
-obsidian-llm-wiki-assistant/                  (= template-export/)
+second-yourself/                  (= template-export/)
 ├── README.md                  # onboarding: what it is · prerequisites · quick start → Manual
 ├── MANUAL.md                  # how to use it (beginner-first)
 ├── LICENSE.md                 # MIT — Mingjun (Jerry) Zhang, 2026

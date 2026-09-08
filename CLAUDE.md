@@ -118,14 +118,15 @@ hijacks or silently strips it.
 ├── output/                    ← 📤 DELIVERABLES — agent-generated reports/drafts/decks (the `output` skill); cited, graph-excluded, NOT knowledge
 │   │   (root = TEMP: one-off / unprocessed deliverables, mirroring raw/'s inbox pattern)
 │   ├── user-notes/            ← standing owner quick-references (roles, cache/tokens, …)
-│   └── fundings/              ← funding applications + the live campaign dossier
+│   ├── fundings/              ← funding applications + the live campaign dossier
+│   └── conference/            ← submission-round plan, per-venue catch-up plans, abstract/registration packs
 │   │   Subfolder files are STANDING, ACTIVELY MAINTAINED artefacts: their wiki source pages carry a
 │   │   "maintained derivative" line in `## Related` — edit such a page → update the derivative in the
 │   │   same pass. New subfolders on user instruction only.
 │
 ├── attic/                     ← 🗄️ owner's COLD STORAGE: retired-but-kept files + MANIFEST.md. Explicit user instruction ONLY (§2.1); in the graph (grey); NOT knowledge
 │
-├── .claude/skills/            ← custom workflow skills: ingest, gather, delegate, query, lint, deep-lint, attic, reflect, qmd-search, output, export-template, adopt
+├── .claude/skills/            ← custom workflow skills: ingest, gather, delegate, query, lint, deep-lint, attic, reflect, qmd-search, output, export-template, adopt, project
 │                                 (`delegate` also holds `lane.py`, the wrapper that spawns a headless lane)
 │
 └── ~/.llm-wiki/lane-home/     ← 🧰 OUTSIDE the vault, machine-local: the directory a headless lane runs from —
@@ -174,7 +175,7 @@ required quality: a script for a mechanical step; itself where the step is short
 context, or its add-ons suffice; a lane only where a named reason holds — (a) a contract requires
 independence or blindness, (b) parallel breadth one context cannot hold, (c) context isolation the
 watermark bands demand, (d) a task longer than the head can afford at its current context — and then
-the minimum number. The reason enters the spawn record **before** the spawn; a spawn without one is a
+the minimum number (drafting helpers on disjoint, fully specified writing tasks are uncapped, one page or section each, the head applying and deciding: owner ruling 2026-09-07). The reason enters the spawn record **before** the spawn; a spawn without one is a
 defect for the register. Design: `wiki/developments/thin-lanes-design.md`.
 
 **A lane's context is assigned per call, never inherited.** A headless lane, spawned through `lane.py`
@@ -322,7 +323,7 @@ instruction overrides a page's tier** (e.g. the owner's published paper → `aut
 ### `wiki/index.md` — content catalogue (update on every ingest)
 Format: `- [[Page Name]] — one-line description.` grouped under `## Sources / Entities / Tools / Models / Benchmarks / Concepts / Syntheses / Developments / Maps / User`.
 **Every writer updates it by anchored `Edit` or append — never a whole-file read-modify-write**: a rewrite commits a stale snapshot and silently erases entries a concurrent session added meanwhile (observed live 2026-08-23; anchored `Edit` instead surfaces a modified-on-disk warning and the concurrent entry survives).
-On a query, **read this first** to locate relevant pages, then drill in. This replaces embedding-based RAG at this scale.
+**Read it by need, in four modes.** `route` — the whole file, whenever the question is *which* pages bear on a topic; the only mode at full recall, since a lexical grep over the index finds 49 % of what real syntheses cited and a grep good enough to route costs what the whole read costs. `section` — one or more named `## ` blocks, only where the list is one a shipped skill step prints (the `ingest` Step 4 table) or the owner's instruction names; a list composed in-session is doubt. `name` — the `- [[…]]` targets alone (`grep -o`), for a membership check. `anchor` — one entry fetched by its exact page name already known, to read its description or copy its line before an edit; never a search (owner 2026-09-07). `anchor` — `grep -n` for one heading or entry line, the only read a registry write needs. **On any doubt, `route`**: a wrong section list loses recall silently. Derivation and the per-consumer table: [[registry-read-policy]]. This replaces embedding-based RAG at this scale.
 
 ### `wiki/log.md` — append-only timeline (log brain-updating ops only)
 **Append-only — in normal ops never read the whole file** (it grows unbounded): *append via shell* (`cat >>` / `echo >>`), never Read+Edit. Read or grep it **only** on explicit request or for debugging — e.g. `grep "^## \[" wiki/log.md | tail -5` lists recent activity cheaply:
@@ -330,6 +331,7 @@ On a query, **read this first** to locate relevant pages, then drill in. This re
 ```markdown
 ## [YYYY-MM-DD] ingest | Short title
 - **Changed**: created [[Page A]], [[summary-slug]]; updated [[index.md]]
+- **Clock**: HH:MM BST   (the write primitive stamps it from the clock, 2026-09-08)
 - **Conflicts**: none   (or: conflict with [[Page B]], flagged)
 ```
 **Keep the entry small** — the shape above, ~600 bytes (template ≈175 B, corpus median ≈750 B when set — 2026-08-23, `wiki/developments/threshold-governance-and-prefix-reconciliation.md`). Detail belongs in the `wiki/developments/` page the entry links, not in the log; the one exception is an entry that is itself the run's only record (a deep-lint audit), which takes what the record needs and no more.
@@ -353,9 +355,10 @@ A query answered **inline** (no file written) and a **read-only** lint scan are 
 |---------|-------|--------------|
 | `/ingest` or "add this to my wiki" | **ingest** | Compile inbox files → wiki pages; update index+log; sort the raw file into its category subfolder. A skill's **Routing** notes send steps to lanes only under the `multi` regime (owner-set, or head-resolved per run under delegation `auto`); in `single` the head does the step itself unless an instrument-rule reason holds (Parallel mode and its verify legs qualify in both regimes). |
 | `/gather <url…>` · `/gather --search "<topic>"` or "gather sources on X" | **gather** | *(opt-in)* Web capture into `raw/` — seed mode (URLs ± cited links) or search mode (topic → approved shortlist); preview-and-approve, capped; hands to `ingest`. |
-| `/query <question>` or "what do my notes say about X" | **query** | Read `index.md` → relevant pages → cited answer; offer to file high-value answers into `syntheses/`. |
+| `/query <question>` or "what do my notes say about X" | **query** | Read `index.md` whole (`route`, §5) → relevant pages → cited answer; offer to file high-value answers into `syntheses/`. |
 | `/lint` or "health-check the wiki" | **lint** | Cheap frequent scan (dead links, orphans, unindexed pages, unresolved conflicts); report; fix only after confirmation. |
 | `/deep-lint` or "monthly deep maintenance" | **deep-lint** | Heavy ~monthly superset: reconciles `flagged:` flags + the `known-issues` register, audits confidence/staleness (flagged + a capped stratified sample of changed and cold pages, never a full-vault re-read), capped online probes, the IDEAS.md Monitor review (its sole standing delegation), qmd refresh; confirms large changes. |
+| `/project link <url>` · `open <name>` · `sync` · `brief` · `snapshot` · `status` · `unlink`, or "open my research outline" | **project** | *(explicit-only, never automatic)* The owner's own working repositories (Overleaf LaTeX, code) managed from the vault: clones in the machine-local project store or registered in place, a registry row in `wiki/tools/`, briefs as commit-pinned snapshots ingested through `raw/`; commit on the word commit, push on the word push. |
 | `/attic archive <files>` · `/attic restore <item>` | **attic** | *(explicit-only, never automatic)* The §2.1 archive/restore runbook — preview-first, control-verified. |
 | `/reflect` or "capture what we learned" | **reflect** | *(explicit-only, never automatic)* Sweep the still-visible conversation for research insight, method lessons, framework defects; route by evidence bar; write only what the owner approves. `--cross`: the same bar over another session's transcript via a read-only lane (skill's Cross-reflection section). |
 | `/qmd-search <q>` *(optional)* | **qmd-search** | Semantic search via qmd — dormant unless installed + enabled (§10). |
@@ -393,7 +396,7 @@ Each skill's own description surfaces automatically — below is just *when to r
 - **Capture / convert**: `defuddle` for web page → Markdown; **`markitdown`** for any non-`.md` source; WebFetch only for throwaway lookups, **never to capture a source** (§3.1).
 - **Vault I/O**: prefer **`obsidian-cli`** (cheaper/safer than raw file ops); `obsidian-markdown` for Obsidian-flavoured syntax; `obsidian-bases` (`.base` views) · `json-canvas` (`.canvas` maps).
 - **Adopted add-ons** (user-level skills, plugins, CLI tools, connectors; machine-local, never shipped): each has a use level, `auto` · `propose-first` · `by-name`, with its pin and grant wording in `wiki/developments/capability-register.md`; consult it before using an adopted add-on the owner did not name and before writing a hands-off grant. On a fresh vault the page is absent: every add-on is then `auto` under its own description until `/adopt` seeds it. Design: `wiki/developments/capability-register-design.md`.
-- **Custom (this vault)**: `ingest` · `gather` (opt-in web capture: seed or search mode) · `delegate` (head-agent delegation runbook + spawn-brief templates, agent-internal) · `reflect` (explicit-only session capture) · `query` · `lint` · `deep-lint` (heavy ~monthly maintenance) · `attic` (explicit-only cold-storage archive/restore) · `qmd-search` (opt-in semantic search; dormant until qmd is installed) · `output` · `export-template` (publish/update the public framework repo) · `adopt` (owner-triggered add-on adoption; the register's only writer) — see §6.
+- **Custom (this vault)**: `ingest` · `gather` (opt-in web capture: seed or search mode) · `delegate` (head-agent delegation runbook + spawn-brief templates, agent-internal) · `reflect` (explicit-only session capture) · `query` · `lint` · `deep-lint` (heavy ~monthly maintenance) · `attic` (explicit-only cold-storage archive/restore) · `qmd-search` (opt-in semantic search; dormant until qmd is installed) · `output` · `export-template` (publish/update the public framework repo) · `adopt` (owner-triggered add-on adoption; the register's only writer) · `project` (explicit-only management of the owner's own working repositories, Overleaf and code, kept outside the vault) — see §6.
 - **Version control / backup**: the **Obsidian Git** plugin backs up the *whole vault* (knowledge included) to a *private* remote (history + multi-device sync); `export-template` publishes the *framework only* to the *public* repo. Two repos, never crossed (§11).
 
 ---
@@ -425,7 +428,7 @@ Each skill's own description surfaces automatically — below is just *when to r
 
 ## 10. Search & Scale
 
-- At this scale (~100–200 sources, hundreds of pages) **`index.md` is the search layer** — no vector DB needed; the agent reads it first, then `grep`s.
+- At this scale (348 sources, 863 pages on 2026-09-06) **`index.md` is the search layer** — no vector DB needed. A routing question reads it in `route` mode and then `grep`s the pages it named; a grep over the index alone is a membership check, never a search (§5).
 - **Optional semantic layer — [qmd](https://github.com/tobi/qmd) via the `qmd-search` skill**,
   **dormant by default**: used only when qmd is installed, an index exists, and no `.qmd-off` marker
   sits at the vault root; otherwise silent fallback to `index.md` → `grep`. **Retrieval only** — the
@@ -521,8 +524,9 @@ Each skill's own description surfaces automatically — below is just *when to r
 
 - ⚠️ **Account limits and logins are the owner's alone (owner ruling 2026-09-06).** No agent
   investigates, probes, predicts or works around an account's usage limit or a login switch, and
-  none adjusts its behaviour to them beyond the recorded stop-and-resume rule: a limit stop waits
-  for the reset time the stop text names, and a resume follows the design's rule. Any change to
+  none adjusts its behaviour to them beyond the recorded stop-and-resume rule: a limit stop stands
+  the supervisor down unless the pre-flight armed limit-off, in which case it waits for the reset
+  time the stop text names and resumes per the design's rule. Any change to
   that handling, and any inquiry into why a limit fell when it did, needs the owner's explicit
   approval first (design record: `wiki/developments/hands-off-mode-design.md`, §Account plan).
 
@@ -577,7 +581,10 @@ When you change *how the system works* (this `CLAUDE.md`, a skill, the folder la
   case behave sensibly — a guard that fires on its own broken premise is worse than no guard. Key a
   guard on the observable property it tests, not a named instance (a specific model, a magic number):
   an instance constant silently excludes the next instance that should fire it — a failure the
-  premise check above will not catch. A check on a finished reply warns and logs; it does not hold
+  premise check above will not catch. Then run it before it is reviewed: a new guard is prototyped on
+  its live surface with a planted case that must fire and one that must not, since a guard judged as
+  prose costs a review round per premise the prose forgot (five rounds, 2026-09-06; the prototyped
+  draft passed). A check on a finished reply warns and logs; it does not hold
   or rewrite the reply, and no warning asks for a correction (owner ruling 2026-09-04; a hold only
   behind an owner switch, `wiki/developments/per-reply-contract-enforcement.md`).
 - **A framework-changing plan takes an independent critic review before the owner gate**, whatever

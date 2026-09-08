@@ -25,7 +25,9 @@ GRANTS
 DECISIONS: {{the run's decisions that bear on this task, and what sibling lanes hold | none}} — a decision the task needs and the brief lacks is a gap the lane reports, never a guess (A1).
 {{headless lanes: the read directories, the write scope and any add-on granted beyond the
 class row, each with its reason — so a refused path reads as a gap to report, never as a
-mistake to work around | in-session: "n/a — inherited"}}
+mistake to work around; every path and command literal, as the fence will see it — no `Let X =`
+shorthand and no pasteable placeholder, since a fenced lane copies a shorthand into a shell
+variable the fence reads as an ungranted root (eight denials, 2026-09-06) | in-session: "n/a — inherited"}}
 
 VERIFICATION
 - Output gate: at least one finding OR one evidenced confirmation per reviewed surface —

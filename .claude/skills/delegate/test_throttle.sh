@@ -177,9 +177,11 @@ mkfix() {
 #   wiki-compile sonnet/opus/fable + medium/max · builder sonnet/opus/fable + high/max
 #   memory-hunter sonnet/sonnet/fable + high/max
 # top = ceiling/ceiling · default = default/ceiling · cheap = floor/ceiling
-# fast = default/floor · cheap-fast = floor/floor
+# fast = default/floor · cheap-fast = floor/floor · auto = as default (frozen legacy on a v1 record;
+# 2026-09-08)
 pins() { # $1 throttle -> "role model effort" triples, one per line
 	case "$1" in
+	auto) pins default ;;
 	top) printf 'critic fable max\ngate-judge opus max\nwiki-compile fable max\nbuilder fable max\n' ;;
 	default) printf 'critic opus max\ngate-judge opus max\nwiki-compile opus max\nbuilder opus max\n' ;;
 	cheap) printf 'critic opus max\ngate-judge opus max\nwiki-compile sonnet max\nbuilder sonnet max\n' ;;
@@ -189,7 +191,7 @@ pins() { # $1 throttle -> "role model effort" triples, one per line
 }
 headline() {
 	case "$1" in
-	top | default) echo "head: fable · max" ;;
+	auto | top | default) echo "head: fable · max" ;;
 	cheap | cheap-fast) echo "head: opus · max recommended" ;;
 	fast) echo "head: fable · high recommended" ;;
 	esac
@@ -204,7 +206,7 @@ echo "throttle.py suite — $NROLES routed roles, fixtures under $W"
 mkfix show1
 run "$PY" "$S" show --root "$W/show1"
 eq "L01a show exits 0" "$RC" "0"
-has "L01b show reports the absent Settings line" "throttle: default (line absent)"
+has "L01b show reports the absent Settings line as auto (the default preset from 2026-09-08)" "throttle: auto (no throttle line: treated as auto)"
 eq "L01c show prints the pinned default row for wiki-compile" \
 	"$(awk '$1=="wiki-compile"{print $2, $3}' "$OUT")" "opus max"
 has "L01d show prints the head recommendation" "head: fable · max"
@@ -215,7 +217,7 @@ done
 eq "L01e show prints one table row per routed role" "$seen" "$NROLES"
 
 # ================================================================== 2 · set + check ===
-for T in top default cheap fast cheap-fast; do
+for T in auto top default cheap fast cheap-fast; do
 	mkfix "s_$T"
 	d="$W/s_$T"
 	run "$PY" "$S" set "$T" --root "$d"
@@ -272,7 +274,7 @@ run "$PY" "$S" set default --root "$d"
 n=$(grep -n -F -- '- **pre-report**:' "$d/CUSTOMISATION.md" | head -1 | cut -d: -f1)
 nxt=$(sed -n "$((n + 1))p" "$d/CUSTOMISATION.md")
 case "$nxt" in
-'- **throttle**: default — subagent routing throttle: top · default · cheap · fast · cheap-fast; semantics in the delegate skill §2 (say "set throttle to X"; the head runs throttle.py set)')
+'- **throttle**: default — subagent routing throttle: auto (the default: model and effort picked per call within the class ranges, the row anchor the reference, each departure recorded with its reason) · top · default · cheap · fast · cheap-fast (hand-set overrides, never re-resolved); semantics in the delegate skill §2 (say "set throttle to X"; the head runs throttle.py set)')
 	ok "L10a set inserts the exact Settings line directly after pre-report" ;;
 *) no "L10a set inserts the exact Settings line directly after pre-report (got '$nxt')" ;;
 esac
@@ -284,7 +286,7 @@ open(p, "w", encoding="utf-8").write(t)
 DROP_LINE_END
 run "$PY" "$S" check --root "$d"
 eq "L10b a missing Settings line is not a failure" "$RC" "0"
-has "L10c the missing line is reported once" "throttle: default (Settings line absent)"
+has "L10c the missing line is reported once, as auto" "throttle: auto (no throttle line: treated as auto)"
 
 # ================================================================== 6 · broken premises
 d="$W/premise"
@@ -616,7 +618,10 @@ eq "L34d control: an allowlist that names Skill is caught" "$(skill_off "$d/plan
 # table (thin-lanes-design.md, "The class table"), so the code is never graded against the
 # same file it reads. `ROUTING_V2=<path> sh test_throttle.sh` swaps in a candidate record —
 # how a proposed or freshly installed routing.json is graded against the same hand-derived
-# pins before it goes live.
+# pins before it goes live. 2026-09-08: the record pins the design's TARGET effort defaults,
+# and the owner's per-call rule of 2026-09-07 17:0x moved those targets to the anchor `xhigh`
+# for the closed-task classes; of the three rows here that moves verifier (high → xhigh) —
+# wiki-compile already read xhigh and gate-judge is fixed — so the row and its pins move too.
 V2="${ROUTING_V2:-$W/routing.v2.json}"
 if [ -n "${ROUTING_V2:-}" ]; then
 	[ -f "$V2" ] || { echo "PROBE FAILED: ROUTING_V2 names no file ($V2)"; echo "FAIL 1/1"; exit 2; }
@@ -631,7 +636,7 @@ else
  "classes": {
   "verifier": {
     "model": {"options": ["sonnet", "opus", "fable"], "default": "sonnet"},
-    "effort": {"options": ["high", "xhigh", "max"], "default": "high"},
+    "effort": {"options": ["high", "xhigh", "max"], "default": "xhigh"},
     "grants": {"default": ["<claim files>"], "extras": ["wiki", "raw"]},
     "writes": [], "tools": ["Read", "Grep", "Glob", "Bash"],
     "skills": {"default": ["lane-core"], "extras": ["markitdown"]},
@@ -659,18 +664,21 @@ fi
 
 # Pinned as literals, hand-derived from the design page's class table (the default in bold
 # there, the weakest and strongest options its floor and ceiling by construction):
-#   verifier      models sonnet* opus fable   · efforts high* xhigh max
+#   verifier      models sonnet* opus fable   · efforts high xhigh* max   (effort default moved
+#                 high → xhigh on 2026-09-08: the anchor under the per-call rule of 2026-09-07 17:0x)
 #   wiki-compile  models sonnet opus* fable   · efforts medium high xhigh* max
 #   gate-judge    models opus (single)        · efforts max (single)
 # top = strongest/strongest · default = default/default · cheap = weakest/strongest
-# fast = default/weakest · cheap-fast = weakest/weakest
+# fast = default/weakest · cheap-fast = weakest/weakest · auto = default/default (the anchors)
 rpins() { # $1 class · $2 throttle -> "model effort"
 	case "$1/$2" in
+	verifier/auto) echo "sonnet xhigh" ;;
 	verifier/top) echo "fable max" ;;
-	verifier/default) echo "sonnet high" ;;
+	verifier/default) echo "sonnet xhigh" ;;
 	verifier/cheap) echo "sonnet max" ;;
 	verifier/fast) echo "sonnet high" ;;
 	verifier/cheap-fast) echo "sonnet high" ;;
+	wiki-compile/auto) echo "opus xhigh" ;;
 	wiki-compile/top) echo "fable max" ;;
 	wiki-compile/default) echo "opus xhigh" ;;
 	wiki-compile/cheap) echo "sonnet max" ;;
@@ -685,7 +693,7 @@ rgot() { awk '/^model: /{m=$2} /^effort: /{e=$2} END{print m, e}' "$OUT"; }
 
 D2="$W/v2"
 mkfix v2 "$V2"
-for T in top default cheap fast cheap-fast; do
+for T in auto top default cheap fast cheap-fast; do
 	run "$PY" "$S" resolve --class wiki-compile --throttle "$T" --root "$D2"
 	eq "L35.$T resolve wiki-compile under '$T'" "$(rgot)" "$(rpins wiki-compile "$T")"
 	run "$PY" "$S" resolve --class verifier --throttle "$T" --root "$D2"
@@ -913,8 +921,19 @@ ROWOPTS_END
 	eq "L47b control — the pin table covers every installed class" \
 		"$(for c in $CLASSES; do opts "$c"; done | grep -c NO-PIN)" "0"
 	run "$PY" "$S" check --root "$VAULT"
-	eq "L47c check against the installed record exits 0" "$RC" "0"
-	has "L47d it reports clean, with the count it diffed" "check: clean — $NCLASSES of $NCLASSES diffed"
+	# A red here names the drifting classes and the command that closes the drift: after an anchor
+	# move in the installed record the definitions hold the old values until the owner runs
+	# `throttle.py set <active throttle>` (2026-09-08). The legs' semantics are unchanged.
+	ACTIVE=$(sed -n "s/.*throttle '\([a-z-]*\)'.*/\1/p" "$OUT" | head -1)
+	DRIFTING=$(sed -n 's|^DRIFT \.claude/agents/\([^.]*\)\.md: .*|\1|p' "$OUT" | sort -u | tr '\n' ' ')
+	CLOSE="close the drift with: python3 throttle.py set ${ACTIVE:-<active throttle>} --root <vault>"
+	if [ "$RC" = "0" ]; then ok "L47c check against the installed record exits 0"
+	else no "L47c check against the installed record exits 0 (rc=$RC; drifting: ${DRIFTING:-none named}; $CLOSE)"; fi
+	if grep -qF -- "check: clean — $NCLASSES of $NCLASSES diffed" "$OUT"; then
+		ok "L47d it reports clean, with the count it diffed"
+	else
+		no "L47d it reports clean, with the count it diffed (stdout lacks 'check: clean — $NCLASSES of $NCLASSES diffed'; drifting: ${DRIFTING:-none named}; $CLOSE)"
+	fi
 	has "L47e and its control line names the schema-2 probes it ran" \
 		"Skill and tools probes caught 2/2 planted definitions"
 	# Extremes: `top` and `cheap-fast` read the ends of the option sets, which no gate moves.
@@ -931,7 +950,8 @@ ROWOPTS_END
 		want="$(fmval "$VAULT/.claude/agents/$c.md" model) $(fmval "$VAULT/.claude/agents/$c.md" effort)"
 		[ "$(rgot)" = "$want" ] || defbad="$defbad $c(resolved '$(rgot)' vs definition '$want')"
 	done
-	eq "L48a resolve under the active throttle matches every definition on disk" "$defbad" ""
+	if [ -z "$defbad" ]; then ok "L48a resolve under the active throttle matches every definition on disk"
+	else no "L48a resolve under the active throttle matches every definition on disk (drifting:$defbad; $CLOSE)"; fi
 	# The gate rule: a default whose `dated` names a target is CARRIED — it sits at or above that
 	# target until the gate passes, never below it, and the target is one of its own options.
 	cat >"$W/carried.py" <<'CARRIED_END'
@@ -1005,6 +1025,106 @@ PLANT_LIVE_END
 	eq "L49b a planted drift against the installed record is a finding" "$RC" "1"
 	has "L49c it names the file and the field" "DRIFT .claude/agents/$PCLS.md: model"
 fi
+
+# ================================== 24 · the `auto` preset (owner ruling 2026-09-07 17:0x; 2026-09-08) ==
+# Under `auto` the row defaults are ANCHORS the head picks around per call: `resolve` returns them
+# labelled `anchor` beside the option lists, a hand-set preset labels its values `throttle <name>`,
+# `show` says so on its header, `set auto` writes exactly what `set default` writes, a missing
+# Settings line reads as `auto`, and a definition off the anchor is a drift like any other. Every
+# clean claim here has its planted control on the same probe.
+d="$W/auto"
+mkfix auto "$V2"
+run "$PY" "$S" resolve --class verifier --throttle auto --root "$d" --json
+eq "L50a resolve --throttle auto --json exits 0" "$RC" "0"
+eq "L50b it returns the anchors (the v2 fixture's verifier defaults) labelled anchor, with the option lists" \
+	"$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["throttle"], d["model"], d["effort"], d["model_src"], d["effort_src"], ",".join(d["model_options"]), ",".join(d["effort_options"]))' "$OUT" 2>&1)" \
+	"auto sonnet xhigh anchor anchor sonnet,opus,fable high,xhigh,max"
+run "$PY" "$S" resolve --class verifier --throttle top --root "$d" --json
+eq "L50c control — under a hand-set preset the same keys read throttle <name>" \
+	"$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["model"], d["effort"], d["model_src"], d["effort_src"], len(d["model_options"]))' "$OUT" 2>&1)" \
+	"fable max throttle top throttle top 3"
+run "$PY" "$S" resolve --class verifier --throttle auto --root "$d"
+has "L50d the text form prints model-src" "model-src: anchor"
+has "L50e and effort-src" "effort-src: anchor"
+has "L50f and the option lists the head picks within" "effort-options: high, xhigh, max"
+run "$PY" "$S" resolve --class verifier --throttle cheap --root "$d"
+has "L50g control — the text form under a hand-set preset labels the source throttle cheap" "effort-src: throttle cheap"
+
+run "$PY" "$S" set auto --root "$d"
+eq "L51a set auto exits 0" "$RC" "0"
+run "$PY" "$S" show --root "$d"
+eq "L51b show's first line is exactly throttle: auto (no fallback note once the line is set)" "$(head -1 "$OUT")" "throttle: auto"
+eq "L51c the table header carries the anchors annotation, on one line" \
+	"$(grep -c 'role .*model .*effort  (anchors: the head picks per call within the options)$' "$OUT")" "1"
+eq "L51d the head line under auto" "$(grep -F 'head: ' "$OUT")" "head: fable · max"
+has "L51e the check summary names the throttle auto" "match throttle 'auto'"
+run "$PY" "$S" show --root "$D2"
+hasnot "L51f control — under default the header carries no anchors annotation" "(anchors:"
+run "$PY" "$S" set auto --root "$d"
+has "L51g a second set auto has nothing to do" "nothing to do (already at 'auto')"
+
+mkfix auto_a "$V2"
+mkfix auto_b "$V2"
+fmall() { for f in "$1"/.claude/agents/*.md; do printf '%s %s %s\n' "$(basename "$f")" "$(fmval "$f" model)" "$(fmval "$f" effort)"; done; }
+run "$PY" "$S" set auto --root "$W/auto_a"
+run "$PY" "$S" set default --root "$W/auto_b"
+eq "L52a set auto writes the same model and effort values as set default (the anchors ARE the row defaults)" \
+	"$(fmall "$W/auto_a")" "$(fmall "$W/auto_b")"
+eq "L52b control — those values are the fixture's pinned defaults, so the equality is not vacuous" \
+	"$(fmval "$W/auto_a/.claude/agents/verifier.md" model)/$(fmval "$W/auto_a/.claude/agents/verifier.md" effort)" "sonnet/xhigh"
+n=$(grep -n -F -- '- **pre-report**:' "$W/auto_a/CUSTOMISATION.md" | head -1 | cut -d: -f1)
+nxt=$(sed -n "$((n + 1))p" "$W/auto_a/CUSTOMISATION.md")
+case "$nxt" in
+'- **throttle**: auto — subagent routing throttle: auto (the default: model and effort picked per call within the class ranges, the row anchor the reference, each departure recorded with its reason) · top · default · cheap · fast · cheap-fast (hand-set overrides, never re-resolved); semantics in the delegate skill §2 (say "set throttle to X"; the head runs throttle.py set)')
+	ok "L52c set auto writes the exact Settings line (auto named as the default, the others as hand-set overrides)" ;;
+*) no "L52c set auto writes the exact Settings line (got '$nxt')" ;;
+esac
+eq "L52d the two fixtures' Settings lines differ in the name alone" \
+	"$(sed -n "$((n + 1))p" "$W/auto_b/CUSTOMISATION.md" | sed 's/: default —/: auto —/')" "$nxt"
+eq "L52e control — the line is under the always-on length it replaces plus the auto gloss (chars)" \
+	"$(if [ "${#nxt}" -le 420 ]; then echo within; else echo "${#nxt}"; fi)" "within"
+
+mkfix noline "$V2"
+run "$PY" "$S" show --root "$W/noline"
+has "L53a a fixture with no Settings line resolves as auto and says so (show)" "throttle: auto (no throttle line: treated as auto)"
+run "$PY" "$S" check --root "$W/noline"
+has "L53b the same note from check" "throttle: auto (no throttle line: treated as auto)"
+has "L53c and check compares against the anchors" "throttle 'auto'"
+run "$PY" "$S" resolve --class verifier --root "$W/noline" --json
+eq "L53d resolve with neither flag nor line resolves under auto and says the line is absent" \
+	"$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["throttle"], d["throttle_source"], d["model_src"])' "$OUT" 2>&1)" \
+	"auto line absent anchor"
+run "$PY" "$S" check --root "$W/noline" --require auto
+hasnot "L53e control — --require auto against the fallback adds no REQUIRE finding" "REQUIRE"
+run "$PY" "$S" check --root "$W/noline" --require default
+has "L53f and --require default against it does" "REQUIRE default: the active throttle is auto"
+
+d="$W/autodrift"
+mkfix autodrift "$V2"
+run "$PY" "$S" set auto --root "$d"
+run "$PY" "$S" check --root "$d"
+eq "L54a control — check is clean after set auto" "$RC" "0"
+"$PY" - "$d/.claude/agents/verifier.md" <<'PLANT_AUTO_DRIFT_END'
+import sys
+p = sys.argv[1]
+t = open(p, encoding="utf-8").read().replace("\neffort: xhigh\n", "\neffort: max\n", 1)
+open(p, "w", encoding="utf-8").write(t)
+PLANT_AUTO_DRIFT_END
+run "$PY" "$S" check --root "$d"
+eq "L54b a definition departing from the anchor under auto is a drift (planted upward: a pick the head may make per call is not a value the definition may hold)" "$RC" "1"
+has "L54c it names the file, the field and the anchor" "DRIFT .claude/agents/verifier.md: effort max ≠ xhigh"
+
+mkfix wn_target "$V2"
+mkfix wn_sibling "$V2"
+TGT_BEFORE=$(manifest "$W/wn_target")
+SIB_BEFORE=$(manifest "$W/wn_sibling")
+run "$PY" "$S" set auto --root "$W/wn_target"
+eq "L55a set auto against one fixture changes nothing in a sibling fixture" "$(manifest "$W/wn_sibling")" "$SIB_BEFORE"
+eq "L55b control — the target fixture did change" \
+	"$(if [ "$(manifest "$W/wn_target")" = "$TGT_BEFORE" ]; then echo unchanged; else echo changed; fi)" "changed"
+printf 'planted\n' >>"$W/wn_sibling/CUSTOMISATION.md"
+eq "L55c control — a planted write into the sibling makes the same probe fire" \
+	"$(if [ "$(manifest "$W/wn_sibling")" = "$SIB_BEFORE" ]; then echo unchanged; else echo changed; fi)" "changed"
 
 # ================================================================== tally =============
 TOTAL=$((PASS + FAIL))

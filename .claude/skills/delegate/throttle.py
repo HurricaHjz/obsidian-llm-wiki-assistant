@@ -14,7 +14,8 @@ its ranges live in `routing.json` beside this file; its effect is the `model:` a
          also flag any definition whose `description:` prose names a current tier rather
          than its admitted range, since `set` never rewrites prose and a stale tier in a
          description misroutes whoever reads it. A lint leg and the publish gate run this;
-         the gate passes `--require default`.
+         `--require NAME` adds a finding unless NAME is the active throttle (a gate pinned
+         to `default` before 2026-09-08 pins `auto`, the default preset, from then on).
   set    write the Settings line and every routed definition in one pass.
   resolve  (schema 2 only) print one class's whole resolved row — model, effort, tools,
          grants, writes, skills, mcp, cache — under a throttle. This is the spawn
@@ -32,16 +33,30 @@ Two record schemas, both read (the vault never breaks between a delivery and its
   read from `order` by index, never from a list's position, so an unsorted options list
   still resolves correctly.
 
-Resolution rule (design: wiki/developments/throttle-routing-design.md, "The selection rule")
+Resolution rule (design: wiki/developments/throttle-routing-design.md, "The selection rule";
+the `auto` row: the owner's ruling of 2026-09-07 17:0x, built 2026-09-08)
 
   throttle      model (v1 · v2)               effort (v1 · v2)
+  auto          role default · row default    ceiling · row default    (the anchors)
   top           ceiling · strongest option    ceiling · strongest option
   default       role default · row default    ceiling · row default
   cheap         floor · weakest option        ceiling · strongest option
   fast          role default · row default    floor · weakest option
   cheap-fast    floor · weakest option        floor · weakest option
 
-  Effort is the ceiling unless the owner names a constraint, and setting a below-default
+  `auto` is the default preset: the Settings default from 2026-09-08 once the owner runs
+  `set auto`, and what a missing Settings line reads as. Under it the head picks model and
+  effort PER CALL within the row's options (`resolve` prints the options beside the anchors,
+  and lane.py records every departure with its `--choice-reason`); the row default is the
+  anchor and strong reference, never a pin, and `set auto` writes the anchors into the
+  definitions so that an in-session spawn, which reads its definition, starts from them. The
+  other five presets are hand-set overrides: `set <name>` writes their resolution once and
+  nothing re-resolves it. On a schema-1 record `auto` resolves exactly as `default` does
+  (frozen legacy).
+
+  Effort is the ceiling unless the owner names a constraint (the written default; from
+  2026-09-06 the head may pick a lower in-range effort per call with a recorded reason, the
+  delegate skill §2 rule), and setting a below-default
   throttle IS the owner naming one. Under `default` and `fast` the head may still choose
   a different in-range model per call; the definition holds the default so that
   `set default` can restore it after `top` has written the ceilings.
@@ -49,9 +64,15 @@ Resolution rule (design: wiki/developments/throttle-routing-design.md, "The sele
   One axis moves between the schemas: under `default`, v1 writes the effort CEILING (no
   discretion, C5 F1, 2026-09-02) while v2 writes the row's marked default. The class table
   of 2026-09-04 marks an effort default per class and amends the owner's "max on every
-  lane" ruling for closed-task classes, each downgrade gated once and metered every run;
-  `cheap` keeps the ceiling effort because the constraint the owner named there is spend,
-  which the model axis carries.
+  lane" ruling for closed-task classes, each downgrade gated once and metered every run
+  (a dated fact: the ruling of 2026-09-07 17:0x supersedes "class default, gated once" for
+  the closed-task classes — builder, verifier, wiki-compile, memory-hunter, planner — whose
+  effort default is the anchor `xhigh`, a reference and not a pin, so a per-call pick either
+  way, `max` for design- or reasoning-heavy work or `high` for a closed one-leg task, is
+  recorded on the lane-open event with its reason and never gated; critic and reflector keep
+  `max`, the effort being the product, and the gate-judge stays fixed); `cheap` keeps the
+  ceiling effort because the constraint the owner named there is spend, which the model
+  axis carries.
 
 Where the ranges come from (a deciding number carries its derivation)
 
@@ -76,13 +97,14 @@ Guards, each keyed on a premise that can fail
   `<root>` and from nowhere else: an earlier draft fell back to this script's own sibling
   copy when the root had none, and a fixture whose record had been deleted then reported
   "clean" against a foreign record (measured 2026-09-02). A MISSING Settings line is not
-  a failure: it resolves to `default` and says so once, because a fresh or pulled template
-  vault has never run `set` and CUSTOMISATION is never published. `set` validates the
+  a failure: it resolves to `auto` (the default preset from 2026-09-08; `default` until
+  then) and says so once, because a fresh or pulled template vault has never run `set` and
+  CUSTOMISATION is never published. `set` validates the
   whole record and builds every new file in memory before it writes anything, so a bad
   record changes no file.
 
   What this script cannot check: whether a model or effort name the record admits is one
-  the harness will actually honour. Headless spawns ignore effort, and the available
+  the harness will actually honour. Headless spawns ignore the DEFINITION's effort and apply --effort (probe 2026-09-04), and the available
   levels depend on the model, so the first in-session spawn after a switch is that check,
   read from the lane transcript. The record's own order lists are therefore the enum, and
   no model name is hard-coded here: a hard-coded list would silently exclude the next
@@ -121,15 +143,18 @@ import os
 import re
 import sys
 
-THROTTLES = ("top", "default", "cheap", "fast", "cheap-fast")
+THROTTLES = ("auto", "top", "default", "cheap", "fast", "cheap-fast")   # `auto` first: the default preset (2026-09-08)
 # schema 1 · throttle -> (index into the model triple, index into the effort pair)
 #   model triple reads floor · default · ceiling ; effort pair reads floor · ceiling
-SELECT = {"top": (2, 1), "default": (1, 1), "cheap": (0, 1),
+#   `auto` is frozen legacy on a v1 record: it resolves exactly as `default` does.
+SELECT = {"auto": (1, 1), "top": (2, 1), "default": (1, 1), "cheap": (0, 1),
           "fast": (1, 0), "cheap-fast": (0, 0)}
 # schema 2 · throttle -> (model picker, effort picker) over the row's option set. The
 # pickers are names, not indices: an option set has no fixed width, and strength comes
-# from `order` (see pick_option below).
-SELECT_V2 = {"top": ("strongest", "strongest"), "default": ("default", "default"),
+# from `order` (see pick_option below). Under `auto` both pickers read the row default:
+# the ANCHOR the head picks around per call (owner ruling 2026-09-07 17:0x).
+SELECT_V2 = {"auto": ("default", "default"),
+             "top": ("strongest", "strongest"), "default": ("default", "default"),
              "cheap": ("weakest", "strongest"), "fast": ("default", "weakest"),
              "cheap-fast": ("weakest", "weakest")}
 # The fields every schema-2 row must carry. Absence is a broken premise, not a default:
@@ -138,7 +163,8 @@ V2_FIELDS = ("model", "effort", "grants", "writes", "tools", "skills", "mcp", "c
              "gate", "dated")
 # The head's own tier under each throttle. A recommendation the head carries in its
 # hand-off line; the head's real model and effort are the owner's client settings.
-HEAD_LINE = {"top": "head: fable · max",
+HEAD_LINE = {"auto": "head: fable · max",
+             "top": "head: fable · max",
              "default": "head: fable · max",
              "cheap": "head: opus · max recommended",
              "cheap-fast": "head: opus · max recommended",
@@ -153,9 +179,11 @@ PREREPORT_RE = re.compile(r"(?mi)^-\s*\*\*pre-report\*\*:.*$")
 SETTINGS_HEAD_RE = re.compile(r"(?m)^##\s+Settings\s*$")
 NEXT_HEAD_RE = re.compile(r"(?m)^##\s+")
 BULLET_RE = re.compile(r"(?m)^-\s")
-SETTINGS_LINE = ('- **throttle**: %s — subagent routing throttle: top · default · cheap · fast · '
-                 'cheap-fast; semantics in the delegate skill §2 (say "set throttle to X"; the '
-                 'head runs throttle.py set)')
+SETTINGS_LINE = ('- **throttle**: %s — subagent routing throttle: auto (the default: model and effort '
+                 'picked per call within the class ranges, the row anchor the reference, each '
+                 'departure recorded with its reason) · top · default · cheap · fast · cheap-fast '
+                 '(hand-set overrides, never re-resolved); semantics in the delegate skill §2 (say '
+                 '"set throttle to X"; the head runs throttle.py set)')
 
 CUSTOM_REL = "CUSTOMISATION.md"
 AGENTS_REL = os.path.join(".claude", "agents")
@@ -348,7 +376,14 @@ def resolve_row(rec, cls, name):
     if spec is None:
         _fail("unknown class %r (known: %s)" % (cls, ", ".join(sorted(rec["classes"]))))
     model, effort = resolve(rec, name)[cls]
+    # Where the two values come from, in the words lane.py records on the lane-open line: under
+    # `auto` they are the row's ANCHORS, which the head picks around per call within the option
+    # lists returned beside them; under a hand-set preset they are that preset's own resolution.
+    source = "anchor" if name == "auto" else "throttle %s" % name
     return {"class": cls, "throttle": name, "model": model, "effort": effort,
+            "model_src": source, "effort_src": source,
+            "model_options": list(spec["model"]["options"]),
+            "effort_options": list(spec["effort"]["options"]),
             "tools": list(spec["tools"]),
             "grants": list(spec["grants"]["default"]),
             "grants_extras": list(spec["grants"]["extras"]),
@@ -364,16 +399,17 @@ def resolve_row(rec, cls, name):
 
 def active_throttle(root):
     """(name, reason) — reason is None when the line was read, else why it was not.
-    A missing line or file is never a failure: it resolves to `default`, because a
-    fresh or pulled template vault has never run `set`."""
+    A missing line or file is never a failure: it resolves to `auto`, the default preset
+    (2026-09-08; `default` before that), because a fresh or pulled template vault has never
+    run `set`. lane.py's fallback for a missing line is the same `auto`."""
     try:
         with open(os.path.join(root, CUSTOM_REL), encoding="utf-8") as fh:
             txt = fh.read()
     except OSError:
-        return "default", "unreadable"
+        return "auto", "unreadable"
     match = SETTINGS_RE.search(txt)
     if not match:
-        return "default", "line absent"
+        return "auto", "line absent"
     name = match.group(1).lower()
     if name not in THROTTLES:
         _fail("unknown throttle '%s' in the CUSTOMISATION Settings line (known: %s)"
@@ -597,14 +633,15 @@ def write_text(path, text):
 
 # --------------------------------------------------------------- subcommands ----------
 
-def throttle_note(reason, verb):
+def throttle_note(reason):
     """How the active throttle was arrived at, or None when the Settings line was read
-    normally. `show` says `line absent` where `check` says `Settings line absent`: the
-    two spell one fact, and each is the wording its verb was specified with."""
+    normally. One wording for every verb since 2026-09-08 (`show` and `check` spelt the
+    absent line differently before): the fallback is named, so a reader of either sees
+    that `auto` was assumed rather than set."""
     if reason == "line absent":
-        return "line absent" if verb == "show" else "Settings line absent"
+        return "no throttle line: treated as auto"
     if reason == "unreadable":
-        return "CUSTOMISATION unreadable"
+        return "CUSTOMISATION unreadable: treated as auto"
     return None
 
 
@@ -669,9 +706,9 @@ def cmd_check(args):
     rec = load_routing(root)
     name, reason = active_throttle(root)
     control = self_control(rec.get("schema", 1))
-    note = throttle_note(reason, "check")
+    note = throttle_note(reason)
     if note:
-        print("throttle: default (%s)" % note)
+        print("throttle: %s (%s)" % (name, note))
     findings, read, fields, total = collect_findings(root, rec, name)
     if args.require:
         if args.require not in THROTTLES:
@@ -689,11 +726,15 @@ def cmd_show(args):
     root = args.root
     rec = load_routing(root)
     name, reason = active_throttle(root)
-    note = throttle_note(reason, "show")
-    print("throttle: %s" % (name if not note else "default (%s)" % note))
+    note = throttle_note(reason)
+    print("throttle: %s%s" % (name, " (%s)" % note if note else ""))
     wanted = resolve(rec, name)
     width = max([len(r) for r in wanted] + [len("role")])
-    print("%-*s  %-6s  %s" % (width, "role", "model", "effort"))
+    header = "%-*s  %-6s  %s" % (width, "role", "model", "effort")
+    if name == "auto":
+        # Under `auto` the table shows anchors, not pins: say so once, on the header line.
+        header += "  (anchors: the head picks per call within the options)"
+    print(header)
     for role, (model, effort) in wanted.items():
         print("%-*s  %-6s  %s" % (width, role, model, effort))
     findings, read, fields, total = collect_findings(root, rec, name)
@@ -710,8 +751,10 @@ def cmd_show(args):
 def cmd_resolve(args):
     """One class's spawn inputs, on stdout, for the wrapper to compose flags from. Text
     form for a human reading a spawn record; `--json` for the wrapper. The throttle comes
-    from the flag, else the Settings line, else `default` — the same order every verb uses,
-    so a spawn can never resolve against a throttle the vault does not hold."""
+    from the flag, else the Settings line, else `auto` — the same order every verb uses,
+    so a spawn can never resolve against a throttle the vault does not hold. Both forms
+    carry `model_src`/`effort_src` (`anchor` under `auto`, `throttle <name>` otherwise)
+    and the row's option lists, the range the head picks within (2026-09-08)."""
     rec = load_routing(args.root)
     if args.throttle:
         name, source = args.throttle, "flag"
@@ -726,11 +769,15 @@ def cmd_resolve(args):
         row["throttle_source"] = source
         print(json.dumps(row, ensure_ascii=False, sort_keys=True))
         return 0
-    note = throttle_note(None if source in ("settings", "flag") else source, "show")
+    note = throttle_note(None if source in ("settings", "flag") else source)
     print("class: %s" % row["class"])
     print("throttle: %s%s" % (name, " (%s)" % note if note else ""))
     print("model: %s" % row["model"])
     print("effort: %s" % row["effort"])
+    print("model-src: %s" % row["model_src"])
+    print("effort-src: %s" % row["effort_src"])
+    print("model-options: %s" % ", ".join(row["model_options"]))
+    print("effort-options: %s" % ", ".join(row["effort_options"]))
     for label, key in (("tools", "tools"), ("grants", "grants"),
                        ("grants-extras", "grants_extras"), ("writes", "writes"),
                        ("skills", "skills"), ("skills-extras", "skills_extras"),

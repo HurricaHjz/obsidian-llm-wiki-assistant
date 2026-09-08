@@ -10,9 +10,9 @@ wiki/developments/thin-lanes-design.md (phase 2) and wiki/developments/hands-off
 (the hands-off additions: file grants, controls, the watchdog, watch, resume, detach, limit).
 
     lane.py init   [--home DIR]                    build or refresh the base lane home
-    lane.py spawn  --run ID --lane ID --class CLASS --brief FILE [options]
+    lane.py spawn  --run ID --lane ID --class CLASS --brief FILE --reason "(a) WHY" [options]
     lane.py watch  --run ID --lane ID [--silence-s N] [--max-wait-s N]
-    lane.py resume --run ID --lane ID --brief FILE
+    lane.py resume --run ID --lane ID --brief FILE   (the spawn's reason is carried forward)
 
 The commands and what they guarantee
 ------------------------------------
@@ -38,7 +38,28 @@ definition's effort is ignored on the headless path (probe 2026-09-04) and `--ef
 applies — and passes it INLINE with `--agents`, so parallel spawns never share a definition
 file. It writes the `lane-open` record line BEFORE starting the process, a `lane-spawned`
 line carrying the session id once it has started (the meter matches headless lanes by that
-id), and a `lane-closed` line carrying the metered figures at the end.
+id), and a `lane-closed` line carrying the metered figures at the end, with the class's
+soft-cap check (`soft_usd`, `soft_src`, `soft_exceeded`: the two-tier caps below).
+
+`--reason` is required at the spawn and names the instrument-rule letter CLAUDE.md section 2.2
+asks for; omitted, whitespace-only and letterless take one refusal (exit 2), before any record
+line. `resume` needs no reason of its own: the lane's reason has not changed, so `lane-resumed`
+carries the reason its `lane-open` recorded, and `--reason` there is an override for a record
+whose reason carries no letter (one written before the check) and is refused against a record
+that carries one.
+
+The per-call pick (owner ruling 2026-09-07 17:0x; built 2026-09-08): under the throttle `auto` —
+the default preset, and the fallback for a missing Settings line — the row's marked defaults are
+ANCHORS, and the head picks `--model` and `--effort` per call within the row's options. The
+`lane-open` line records where each axis came from: `model_src`/`effort_src` read `anchor` (no
+override, or one equal to the anchor), `auto: <text>` (a departure, carrying `--choice-reason`'s
+text), `throttle <name>` (a hand-set preset's own value) or `explicit` (a departure from a
+hand-set preset's value, which needs no reason), and `choice_reason` carries the text or null.
+Under `auto` a departure with no `--choice-reason` is refused exactly as a missing `--reason` is
+(exit 2, before any record line, `--dry-run` included). `--choice-reason` says why this model and
+effort for this task; `--reason` says why a lane at all, stays required, and the two are never
+merged. `resume` makes no new pick: it copies the three fields from the lane's latest
+`lane-open`, `unrecorded` and null for a record from before them.
 
 The `lane-open` line's `mode` is the run's delegation regime, `single` or `multi`, with its
 source in `mode_src` (`owner`: the Settings line, or the owner's word for this run; `head`:
@@ -105,6 +126,19 @@ window, since the cache has lapsed by then and a fresh spawn costs less. It reco
 D29: after a `limit` close the window is WAIVED — one cold re-read is the accepted token loss —
 and `lane-resumed` carries `after_limit` and `age_s`; a lane whose transcript cannot be found is
 re-spawned, never resumed (exit 2).
+After a `budget` close — the CLI's own `--max-budget-usd` stop, `error_max_budget_usd` — the
+recorded cap is NOT re-used: resume refuses (exit 2, no record line) unless `--budget-usd` is
+given and is above the cap the lane-open recorded (`hard_usd`, or `budget_usd` for a record from
+before the class caps). Either the CLI's running total survives the resume and the same cap kills
+the lane on its first turn, or it does not and the lane silently gets a second full helping of it;
+neither is a resume. Raised, `hard_src` reads `explicit --budget-usd (raised over a budget close
+from $<cap>)` and `lane-resumed` carries `after_budget: true` beside `after_limit`. Its premise
+cases, each exit 2: a `budget` close whose lane-open carries neither `hard_usd` nor `budget_usd`
+(a torn or pre-class-caps record) refuses because the cap it stopped at is unknown; a
+`--budget-usd` equal to the recorded cap refuses, since equal is not above; a non-numeric recorded
+cap refuses as a broken premise. Every other close class resumes exactly as before, and there
+`--budget-usd` is raise-only against the cap the resume composed (owner ruling, 2026-09-07):
+at or below it the composed cap is kept, `hard_src` says so and the resume prints one line.
 
 The report cut (D8): stdout carries at most `--report-words` words of the report (default 800)
 plus `(N of M words shown; full text: <path>)`; the full text is persisted; `lane-closed`
@@ -123,9 +157,41 @@ Numbers that decide, each with its derivation
   - deadline, default 3600 s: the longest lane in the run store ran 1,750 s wall
     (2026-09-04), so the default is a shade over twice the longest observed lane. A bound
     with headroom, not a budget; `--deadline-s` sets it per call.
-  - budget cap, default from the `breadth` knob (light $2 · standard $5 · max $15): the
-    delegate skill's section 2a table, itself anchored to metered gate lanes at $0.35–0.96
-    and compile lanes at $1–3. `--budget-usd` sets it per call.
+  - cost caps, two tiers per class from the `cost` block of the class row in `routing.json`
+    (the rule itself is `cost_caps` below). SOFT: the lane's soft line — the head's own
+    `--expect-usd` where the call gives one (`soft_src: expect`), else `soft_usd`, the class's
+    completed maximum plus 25 % headroom over the run store's completed `lane-closed` events
+    (`soft_src: class`; token-efficiency findings 2026-09-07, proposal T3: a bound over the
+    completed maximum kills no lane of its class, where a fitted percentile would have killed
+    a $14.91 reflector that completed); logged on the close line and in `lane-closed`, never a
+    stop, and read back by handsoff.py's waste table at the run's close. HARD: what the CLI
+    gets as `--max-budget-usd` — the smaller of the class base and the run's envelope
+    remainder, else the base alone, and then an explicit `--budget-usd` where it RAISES that
+    figure (owner ruling, 2026-09-07: `--budget-usd` may raise a lane's stop, never lower it,
+    since a cap read as a sizing guess put a builder at $6 under its class's $18.22 soft
+    threshold — known-issues, 2026-09-07). The base is max(HARD_MULTIPLIER × `usual_usd`,
+    `soft_usd`): the multiplier 5 replaces the unmeasured 10 on the owner's ruling of
+    2026-09-07 — over the run store folded that day no completed lane costs more than about
+    twice its class's usual cost (the widest ratios: verifier 12.7 ×, memory-hunter 3.2 ×,
+    reflector 2.9 ×, builder 2.2 × — and every one of those maxima still sits under its class
+    base, because the max() term below is the maximum × 1.25) — and the max() keeps the hard
+    stop off its own class's history, since the median and the maximum are unrelated
+    statistics and a small median times the multiplier can sit under a maximum a lane of that
+    class completed at (the verifier's 5 × $0.77 = $3.85 against a completed maximum of $9.78,
+    critic finding F1). A class without figures — fewer than three completed lanes, a floor
+    set by judgement, unmeasured — keeps the `breadth` knob's value (light $2 · standard $5 ·
+    max $15, the delegate skill's section 2a, anchored to metered gate lanes at $0.35–0.96 and
+    compile lanes at $1–3), composed with the envelope remainder in the same way, and takes an
+    `--expect-usd` as its soft line where the call gives one. `resume` applies the same
+    composition, and the same raise-only rule, to the hard stop the lane-open recorded.
+    Premise cases, each exit 2 before any record line: an `--expect-usd` above the lane's hard
+    stop (a line the lane would be killed before reaching), and a non-positive `--expect-usd`.
+    A `--budget-usd` equal to the class cap is not a premise failure: the class cap is kept and
+    the spawn prints one line saying so. An envelope with nothing left still refuses every
+    spawn, and an explicit `--budget-usd` is still that one case's override. `cost-figures` re-derives every class's figures from the run store
+    and `cost-figures --check` compares them with the table (exit 1 on drift), which is what
+    keeps the blocks and the floor of three honest; nothing schedules it — the head runs it,
+    by the delegate skill's instruction.
   - kill grace, 5 s between SIGTERM and SIGKILL to the process group: set by judgement,
     unmeasured — long enough for the CLI to flush its transcript, short enough that a hung
     lane does not hold the head.
@@ -199,6 +265,7 @@ assistant text when the result field came back empty, and the limit-stop shape.
 """
 
 import argparse
+import contextlib
 import datetime
 import glob as globmod
 import hashlib
@@ -218,9 +285,12 @@ CORE_NAME = "lane-core.md"      # the core's filename in templates/ and the home
 CORE_SLICE = "lane-core"        # its name in a class row's skills.default
 KILL_GRACE_S = 5                # SIGTERM -> SIGKILL, see the derivation above
 DEFAULT_DEADLINE_S = 3600       # see the derivation above
-BREADTH_BUDGET = {"light": 2.0, "standard": 5.0, "max": 15.0}   # delegate skill section 2a
+BREADTH_BUDGET = {"light": 2.0, "standard": 5.0, "max": 15.0}   # delegate skill section 2a; the fallback for a class without cost figures
 DEFAULT_BREADTH = "standard"
-THROTTLES = ("top", "default", "cheap", "fast", "cheap-fast")
+HARD_MULTIPLIER = 5             # hard stop = 5 × the class's usual cost; owner ruling 2026-09-07, replacing the unmeasured 10: in the classes that carry the run (builder, critic, reflector) no completed lane costs more than about three times its class's usual cost (the ruling said about twice; the reflector reads 2.93 ×), and max(5 × usual, soft) covers the two whose history exceeds it (verifier, memory-hunter) (see the derivation above)
+SOFT_HEADROOM = 1.25            # soft = the class's completed maximum × 1.25 (token-efficiency findings 2026-09-07, proposal T3: a bound over the completed maximum kills no lane of its class)
+COST_FLOOR_N = 3                # fewest completed lanes a class needs before it carries a cost block; set by judgement, unmeasured (see the derivation above). `cost-figures` spells this number out as `three`
+THROTTLES = ("auto", "top", "default", "cheap", "fast", "cheap-fast")   # `auto` first: the default preset, and the fallback for a missing Settings line (owner ruling 2026-09-07 17:0x, built 2026-09-08)
 REGIMES = ("single", "multi")   # what a run actually runs under; `auto` is resolved to one per run
 DEFAULT_SILENCE_S = 900         # longest healthy silence observed 12.3 min (see the derivation above)
 BASELINE_FACTOR = 1.5           # --baseline-lane multiplier, set by judgement, unmeasured
@@ -242,6 +312,37 @@ def die(reason):
     """A premise failure: say what broke, write nothing, exit 2."""
     sys.stderr.write("lane.py: PROBE FAILED: %s\n" % reason)
     sys.exit(2)
+
+
+# The instrument-rule letter a `lane-open` reason carries (CLAUDE.md section 2.2, the four
+# reasons a lane may be spawned for): the bracketed form anywhere in the text, or a leading bare
+# letter followed by a colon or a spaced dash — `(a)`, `a:`, `a —`, `a -` — the forms heads have
+# written live (register, 2026-09-06). The meter's tally reads the same forms (fable-share.py,
+# REASON_LEAD_RE); the two expressions are twins kept in step by hand.
+REASON_BRACKET_RE = re.compile(r"\(([a-dA-D])\)")
+REASON_LEAD_RE = re.compile(r"^\s*([a-dA-D])\s*(?::|[\u2014-](?=\s|$))")
+REASON_FORMS = "`(a)`, `a —`, `a -` or `a:` (letters a to d)"
+
+
+def reason_letters(text):
+    """The lower-case instrument-rule letters a reason names, as the meter tallies them."""
+    letters = {letter.lower() for letter in REASON_BRACKET_RE.findall(text or "")}
+    lead = REASON_LEAD_RE.match(text or "")
+    if lead:
+        letters.add(lead.group(1).lower())
+    return letters
+
+
+def require_reason_letter(text):
+    """One refusal for every reason that names no instrument-rule letter: omitted, whitespace-only
+    and letterless alike. A spawn whose record carries no letter is a defect for the register
+    (CLAUDE.md section 2.2) and the meter tallies it as `none`, so the omitted form — recorded as
+    "" until now — takes the refusal the letterless one has taken since 2026-09-06 (register,
+    2026-09-07). Called before anything is written, so a refused spawn leaves no record line."""
+    if not reason_letters(text):
+        die("--reason %r carries no instrument-rule letter: open it with one of %s, as CLAUDE.md "
+            "section 2.2 requires of every spawn — refused rather than recorded"
+            % ((text or "")[:60], REASON_FORMS))
 
 
 def vault_root():
@@ -663,11 +764,15 @@ def pick(order, options, default, throttle):
         die("no option in %r appears in the global order %r" % (options, order))
     strongest = max(known, key=order.index)
     weakest = min(known, key=order.index)
-    return {"top": strongest, "cheap": weakest, "default": default,
+    return {"auto": default, "top": strongest, "cheap": weakest, "default": default,
             "fast": None, "cheap-fast": None}.get(throttle, default), weakest, strongest
 
 
 def resolve_tier(routing, row, cls, throttle):
+    """(model, effort, model options, effort options): the row's tier under the throttle. `auto`
+    and `default` both return the row's marked defaults; under `auto` they are the ANCHORS the
+    head picks around per call within the two option lists (owner ruling 2026-09-07 17:0x), and
+    the per-call departure is recorded by the caller, never re-resolved here."""
     model_opts = field(row, cls, "model", "options")
     model_default = field(row, cls, "model", "default")
     effort_opts = field(row, cls, "effort", "options")
@@ -675,12 +780,323 @@ def resolve_tier(routing, row, cls, throttle):
     model_order = routing["order"]["model"]
     effort_order = routing["order"]["effort"]
     model, model_weak, _ = pick(model_order, model_opts, model_default, throttle)
-    effort, effort_weak, _ = pick(effort_order, effort_opts, effort_default, throttle)
-    if throttle == "fast":
+    effort, effort_weak, effort_strong = pick(effort_order, effort_opts, effort_default, throttle)
+    if throttle == "cheap":
+        effort = effort_strong   # cheap constrains spend on the model axis; effort stays the ceiling (throttle.py's table, 2026-09-06)
+    elif throttle == "fast":
         model, effort = model_default, effort_weak
     elif throttle == "cheap-fast":
         model, effort = model_weak, effort_weak
     return model, effort, model_opts, effort_opts
+
+
+# ------------------------------------------------------------------- cost caps -------------
+
+def class_cost(row, cls):
+    """The row's `cost` block — `soft_usd` (the class's completed maximum plus 25 % headroom:
+    logged at close, never a stop) and `usual_usd` (the class median, the hard stop's base) —
+    or None for a row without one, which takes the breadth tier. A block that is present but
+    malformed is a premise failure: a table that half-states a cap is worse than one that
+    states none. A row with fewer than three completed lanes carries no block (the floor is
+    applied where the table is built, and is set by judgement, unmeasured)."""
+    cost = row.get("cost")
+    if cost is None:
+        return None
+    if not isinstance(cost, dict):
+        die("routing class `%s` has a `cost` field that is not an object" % cls)
+    for key in ("soft_usd", "usual_usd"):
+        value = cost.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            die("routing class `%s` has a `cost` block whose `%s` is not a positive number (%r)"
+                % (cls, key, value))
+    return cost
+
+
+def envelope_remainder(run, record_path):
+    """(remainder, reason, envelope) for the run the lane joins: handsoff.py's `envelope_left`
+    over the run record, imported lazily from beside this script so the wrapper still runs
+    without it. The remainder is None wherever no number can be had — no module, no record,
+    no `run-open`, no `envelope_usd` on it, or a meter that gave no session total — and the
+    reason says which, for the record's `hard_src`."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if not os.path.isfile(os.path.join(here, "handsoff.py")):
+        return None, "handsoff.py not found beside lane.py", None
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    sys.dont_write_bytecode = True   # the import must never leave a __pycache__ in the skill directory
+    try:
+        import handsoff
+    except Exception as exc:         # a sibling script that does not import is a reason, never a crash
+        return None, "handsoff.py did not import (%s)" % exc, None
+    if not os.path.isfile(record_path):
+        return None, "no run record at %s" % record_path, None
+    events, _ = handsoff.read_record(record_path)
+    if handsoff.last_index(events, ("run-open",)) < 0:
+        return None, "no run-open event in the run record", None
+    envelope = handsoff.run_open(events).get("envelope_usd")
+    start = handsoff.last_index(events, handsoff.SESSION_EVENTS)
+    remainder, reason = handsoff.envelope_left(events, run, None, start)
+    if remainder is None:
+        return None, reason, envelope
+    return float(remainder), reason, float(envelope)
+
+
+def hard_base(cost, cls, breadth):
+    """(base, src, below, unmetered_fmt): the hard stop's base before the run's envelope
+    composes with it, and the three phrasings `hard_src` needs for it.
+
+    For a class with figures the base is max(HARD_MULTIPLIER × usual, soft), rounded to two
+    decimals. The median and the maximum are unrelated statistics, so nothing makes the
+    multiple exceed the observed maximum: on the figures folded 2026-09-07 the verifier's
+    5 × $0.77 = $3.85 sits under its own completed maximum of $9.78 and under its soft
+    threshold of $12.22, so the plain multiple would kill a working lane below its class's
+    own history (critic finding F1, 2026-09-07). Taking the larger term keeps hard ≥ soft
+    whenever both exist; since soft is the completed maximum × SOFT_HEADROOM, the base sits
+    above every completed lane of the class whatever the multiplier is, which is what lets
+    the multiplier fall to 5 without stopping a lane the store has seen finish. Only the
+    envelope remainder may now pull the cap under the soft threshold, and it names itself in
+    `hard_src`; an explicit `--budget-usd` raises only (`cost_caps`).
+
+    A class without figures takes the `breadth` knob's tier. `src` is `hard_src` where the
+    base itself decides, `below` the phrase the envelope-remainder line puts after `below `,
+    and `unmetered_fmt` a format string with one `%s` slot for the reason no remainder could
+    be read (unused on the no-figures branch, which never reports an unmetered envelope)."""
+    if cost is None:
+        tier = BREADTH_BUDGET.get(breadth, BREADTH_BUDGET[DEFAULT_BREADTH])
+        return (tier, "breadth-tier (no class figures)", "the breadth tier $%.2f" % tier,
+                "breadth-tier (no class figures)")
+    usual, soft = float(cost["usual_usd"]), float(cost["soft_usd"])
+    multiple = round(HARD_MULTIPLIER * usual, 2)
+    if soft > multiple:
+        return (round(soft, 2),
+                "soft $%.2f (class %s; %d × usual $%.2f below it)"
+                % (soft, cls, HARD_MULTIPLIER, multiple),
+                "the soft threshold $%.2f" % soft,
+                "soft $%.2f (class %s; %d × usual $%.2f below it; envelope unmetered: %%s)"
+                % (soft, cls, HARD_MULTIPLIER, multiple))
+    return (multiple, "%d × usual $%.2f (class %s)" % (HARD_MULTIPLIER, usual, cls),
+            "%d × usual $%.2f" % (HARD_MULTIPLIER, multiple),
+            "%d × usual $%.2f (envelope unmetered: %%s)" % (HARD_MULTIPLIER, usual))
+
+
+def raise_only(explicit, class_hard, class_src, term="class"):
+    """(hard_usd, hard_src) after the raise-only rule of the owner ruling of 2026-09-07:
+    `--budget-usd` may raise a lane's hard stop over the value its class composed, never set
+    it below. Below or equal, the class value is kept and `hard_src` records the refusal, so
+    the record shows both figures. The defect it closes: an explicit cap read as a sizing
+    guess put a builder's hard stop at $6 under its class's $18.22 soft threshold, the same
+    head-estimated sizing that had killed three builders (known-issues, 2026-09-07). A head
+    that wants to state its own expectation passes `--expect-usd`, which is a logged line and
+    never a stop. `term` names the value raised over — the `class` cap on a spawn, the `resumed`
+    cap on a resume. Nothing here prints; the caller does, so the note reaches stdout once."""
+    if explicit is None:
+        return class_hard, class_src
+    if float(explicit) > float(class_hard):
+        return (float(explicit),
+                "explicit --budget-usd (raised over %s $%.2f: %s)" % (term, class_hard, class_src))
+    return class_hard, ("explicit --budget-usd $%.2f at or below %s cap $%.2f: %s cap kept (%s)"
+                        % (explicit, term, class_hard, term, class_src))
+
+
+def cost_caps(explicit, cost, cls, breadth, run, record_path):
+    """(hard_usd, hard_src, soft_usd): the two-tier cap for one spawn.
+
+    SOFT is the class's `soft_usd` (None without figures): logged at close, never a stop, and
+    replaced by the head's `--expect-usd` where one is given (`soft_line` below).
+    HARD is what `--max-budget-usd` gets: the class value — the smaller of `hard_base` above
+    (max(HARD_MULTIPLIER × usual, soft), or the breadth tier for a class without figures) and
+    the run's envelope remainder, when the run record carries an envelope and `envelope_left`
+    returns a number; else the base alone, with the reason no remainder was had — and then an
+    explicit `--budget-usd` where it RAISES that value (`raise_only`). `hard_src` names which
+    of those decided. An envelope with nothing left refuses the spawn (exit 2, no record),
+    whether or not the class has figures: a lane cannot run on a cap of nothing, and an
+    explicit `--budget-usd` is still the override for that one case — there is no class value
+    to raise over when the run has nothing left, so the explicit figure stands alone and
+    `hard_src` says which envelope it overrode."""
+    soft = float(cost["soft_usd"]) if cost else None
+    base, base_src, below, unmetered_fmt = hard_base(cost, cls, breadth)
+    remainder, reason, envelope = envelope_remainder(run, record_path)
+    if remainder is None:
+        # A no-figures spawn has nothing to compose with, so it reports the tier alone.
+        class_hard = base
+        class_src = base_src if cost is None else unmetered_fmt % reason
+    elif remainder <= 0:
+        if explicit is None:
+            die("run %s: the envelope has nothing left (remainder $%.2f of $%.2f: %s) — no lane "
+                "spawns on a cap of nothing; raise the envelope or pass --budget-usd with a reason"
+                % (run, remainder, envelope, reason))
+        return (float(explicit),
+                "explicit --budget-usd (override of an exhausted envelope $%.2f, remainder $%.2f)"
+                % (envelope, remainder), soft)
+    elif remainder < base:
+        class_hard = remainder
+        class_src = ("envelope remainder $%.2f (envelope $%.2f, spent $%.2f; below %s)"
+                     % (remainder, envelope, envelope - remainder, below))
+    else:
+        class_hard, class_src = base, base_src
+    hard, hard_src = raise_only(explicit, class_hard, class_src)
+    return hard, hard_src, soft
+
+
+def soft_line(expect, soft, hard_usd):
+    """(soft_usd, soft_src): the line a close is measured against, owner ruling 2026-09-07.
+
+    `--expect-usd` is the head's own cost estimate for this lane. Where it is given it BECOMES
+    the soft line (`soft_src: expect`), so the close says whether the head's estimate held;
+    where it is not, the class's `soft_usd` is the line (`soft_src: class`), and a class
+    without figures has neither (both None). It is logged, never a stop — the hard stop is
+    the only thing that ends a lane on cost.
+
+    Two premise failures, each exit 2 before any record line: a non-positive estimate, which
+    is not a dollar figure; and an estimate above the lane's own hard stop, which is a line
+    the lane cannot cross without being killed first — a soft line that can never fire is a
+    silent no-op, and the two figures are named so the caller sees which to move."""
+    if expect is None:
+        return soft, ("class" if soft is not None else None)
+    expect = float(expect)
+    if not expect > 0:
+        die("--expect-usd $%.2f is not a positive dollar figure — the head's estimate is what "
+            "it expects the lane to bill, and a lane cannot bill nothing or less" % expect)
+    if expect > float(hard_usd):
+        die("--expect-usd $%.2f is above this lane's hard stop $%.2f — the lane would be killed "
+            "before it reached the line, so the soft line could never fire; raise the cap with "
+            "--budget-usd or lower the estimate" % (expect, float(hard_usd)))
+    return round(expect, 2), "expect"
+
+
+def soft_check(cost, soft):
+    """`soft_exceeded` for a close: True or False against a billed figure, None when the class
+    has no figures or the close carries no dollar figure (a torn result, a watch close)."""
+    if soft is None or isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return None
+    return float(cost) > float(soft)
+
+
+# --------------------------------------------------------------- cost-figures (read-only) ---
+
+def median(values):
+    """The middle value; an even count takes the mean of the two middle ones."""
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def fold_costs(records_dir):
+    """(per class figures, counts): the run store's completed lane costs folded read-only.
+
+    One observation is a `lane-closed` event with `exit_class` `completed` and a numeric
+    `total_cost_usd`; a line that does not parse is skipped and COUNTED, so a torn record
+    never passes as an absence. `usual_usd` is the median, `soft_usd` the maximum × the
+    headroom, both rounded to two decimals — the fold that wrote the shipped blocks. A
+    directory that is not there, holds no `.jsonl`, or holds no completed close is a premise
+    failure, never a clean zero. This function opens files for reading only."""
+    if not os.path.isdir(records_dir):
+        die("no records directory at %s" % records_dir)
+    files = sorted(globmod.glob(os.path.join(records_dir, "*.jsonl")))
+    if not files:
+        die("no .jsonl record file under %s" % records_dir)
+    costs, dates, torn, closes = {}, {}, 0, 0
+    for path in files:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                lines = handle.readlines()
+        except OSError as exc:
+            die("record file unreadable (%s): %s" % (path, exc))
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                torn += 1
+                continue
+            if not isinstance(event, dict) or event.get("event") != "lane-closed":
+                continue
+            if event.get("exit_class") != "completed":
+                continue
+            billed = event.get("total_cost_usd")
+            if isinstance(billed, bool) or not isinstance(billed, (int, float)):
+                continue
+            cls = event.get("class") or "unnamed-class"
+            costs.setdefault(cls, []).append(float(billed))
+            stamp = event.get("ts")
+            if isinstance(stamp, str) and len(stamp) >= 10:
+                dates.setdefault(cls, []).append(stamp[:10])
+            closes += 1
+    if not closes:
+        die("no completed lane-closed with a numeric total_cost_usd in %d record file(s) "
+            "under %s" % (len(files), records_dir))
+    folded = {}
+    for cls, values in costs.items():
+        window = sorted(dates.get(cls) or [])
+        folded[cls] = {"n": len(values),
+                       "window": "%s..%s" % (window[0], window[-1]) if window else "no ts",
+                       "usual_usd": round(median(values), 2),
+                       "max_usd": round(max(values), 2),
+                       "soft_usd": round(max(values) * SOFT_HEADROOM, 2)}
+    return folded, {"files": len(files), "closes": closes, "torn": torn}
+
+
+def cost_verdict(row, block):
+    """`--check`'s word for one class: `same`, `drift (…)`, `no block (n < 3)` or `fold due`.
+    The table's figures are on the left of each arrow, the fold's on the right; a class the
+    fold has too few closes for carries no block, so a block on such a class is a drift with
+    `none` on the right. Returns (verdict, is a drift)."""
+    n = row["n"] if row else 0
+    if n < COST_FLOOR_N:
+        if block is None:
+            return "no block (n < %d)" % COST_FLOOR_N, False
+        return ("drift (soft $%.2f → none · usual $%.2f → none · n %s → %d)"
+                % (float(block["soft_usd"]), float(block["usual_usd"]),
+                   block.get("n", "absent"), n), True)
+    if block is None:
+        return "fold due (n=%d ≥ %d, no block)" % (n, COST_FLOOR_N), True
+    same = (round(float(block["soft_usd"]), 2) == row["soft_usd"]
+            and round(float(block["usual_usd"]), 2) == row["usual_usd"]
+            and block.get("n") == row["n"])
+    if same:
+        return "same", False
+    return ("drift (soft $%.2f → $%.2f · usual $%.2f → $%.2f · n %s → %d)"
+            % (float(block["soft_usd"]), row["soft_usd"], float(block["usual_usd"]),
+               row["usual_usd"], block.get("n", "absent"), row["n"]), True)
+
+
+def cost_figures_report(folded, counts, table, check, records_dir, fmt):
+    """(lines, drifted): what `cost-figures` prints. One line per class, then the run's own
+    count line — the positive control of the fold: a zero anywhere in it is visible beside the
+    files and closes it was computed from. With `--check` the classes are the union of the
+    fold's and the table's, so a block on a class with no completed close is seen too."""
+    names = sorted(set(folded) | (set(table) if check else set()))
+    drifted, rows, lines = False, [], []
+    for cls in names:
+        row = folded.get(cls)
+        n = row["n"] if row else 0
+        if n < COST_FLOOR_N:
+            text = "%s · n=%d (below the floor of three: no block)" % (cls, n)
+        else:
+            text = ("%s · n=%d · %s · usual $%.2f · max $%.2f · soft $%.2f"
+                    % (cls, n, row["window"], row["usual_usd"], row["max_usd"],
+                       row["soft_usd"]))
+        entry = dict(row or {"n": 0})
+        entry["class"] = cls
+        if check:
+            verdict, is_drift = cost_verdict(row, table.get(cls))
+            drifted = drifted or is_drift
+            text += " · %s" % verdict
+            entry["verdict"] = verdict
+        rows.append(entry)
+        lines.append(text)
+    tail = ("cost-figures: %d record file(s), %d completed close(s), %d torn line(s)"
+            % (counts["files"], counts["closes"], counts["torn"]))
+    if fmt == "json":
+        return [json.dumps({"records_dir": records_dir, "files": counts["files"],
+                            "completed": counts["closes"], "torn": counts["torn"],
+                            "floor_n": COST_FLOOR_N, "headroom": SOFT_HEADROOM,
+                            "checked": bool(check), "drift": drifted, "classes": rows},
+                           indent=1, sort_keys=True)], drifted
+    return lines + [tail], drifted
 
 
 # ------------------------------------------------------------------ definition -------------
@@ -784,6 +1200,9 @@ def spellings(given, real):
     return [real] if given == real else [real, given]
 
 
+SYMLINK_ROOTS = [os.path.expanduser("~/.llm-wiki")]   # roots the vault addresses through a symlink
+
+
 def add_unique(target, items):
     for item in items:
         if item not in target:
@@ -799,6 +1218,13 @@ def add_dirs_for(entries):
         real_dir = os.path.dirname(entry["real"]) if entry["file"] else entry["real"]
         given_dir = os.path.dirname(entry["given"]) if entry["file"] else entry["given"]
         add_unique(out, spellings(given_dir, real_dir))
+        # a grant given as the real path still gets the symlinked spelling a brief may use
+        # (residual of 2026-09-05, seen on lane G6bR-H1 2026-09-06)
+        for root in SYMLINK_ROOTS:
+            if os.path.islink(root):
+                real_root = os.path.realpath(root)
+                if real_dir == real_root or real_dir.startswith(real_root + os.sep):
+                    add_unique(out, [root + real_dir[len(real_root):]])
     return out
 
 
@@ -1005,6 +1431,39 @@ def parse_transcript(path):
 
 
 # ----------------------------------------------------------------------- record -------------
+
+def open_console_for_spawn(run, viewer=None):
+    """Put the run's console on screen when none is alive, right after the lane's record lines
+    exist, so every run that spawns a lane is watched whatever its shape: a hands-off run
+    (`run-open` opens it first), an attended run's headless lanes (here), an in-session Agent
+    lane (the spawn-record guard's allow path). Owner ruling 2026-09-08, after an attended
+    deep-lint's six lanes ran unwatched. One window per run: handsoff.open_console_if_dark
+    refuses while a console is alive or was opened within its grace window, so a second lane, a
+    re-spawn or a detached worker never doubles it, and the live console shows the new lane
+    itself. Opt-outs: `--viewer none`, AIMYTH_VIEWER=none, or `viewer: none` in the run's
+    grants file. The opener's lines go to stderr (stdout is this wrapper's report channel) and
+    any failure is one stderr line: a viewer failure never fails a spawn (SystemExit included:
+    handsoff's token check exits on a malformed run id, critic F1). Placement: after the
+    `lane-open` line and before the child starts, so the opener's worst case (three 10 s bounds,
+    pgrep, the viewer and its fallback: handsoff VIEWER_TIMEOUT_S) delays the start, never the
+    child's own brief clock (critic F6)."""
+    viewer = viewer or os.environ.get("AIMYTH_VIEWER") or None
+    if viewer not in (None, "terminal", "none"):
+        sys.stderr.write("lane.py: viewer %r is neither terminal nor none · the grants file decides\n" % viewer)
+        viewer = None
+    if viewer == "none":
+        sys.stderr.write("lane.py: viewer none · no window\n")
+        return False
+    try:
+        sys.dont_write_bytecode = True      # no __pycache__ in the skill directory (the suite's write proof)
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import handsoff
+        with contextlib.redirect_stdout(sys.stderr):
+            return handsoff.open_console_if_dark(run, viewer=viewer)
+    except (Exception, SystemExit) as exc:
+        sys.stderr.write("lane.py: viewer skipped (%s: %s)\n" % (type(exc).__name__, exc))
+        return False
+
 
 def append_record(path, payload):
     try:
@@ -1233,6 +1692,14 @@ def summary_of(run, lane, cls, model, effort, close):
         line += " · report %s/%s words%s" % (close.get("report_shown", "?"),
                                               close["report_words"],
                                               " (cut)" if close.get("report_cut") else "")
+    if close.get("soft_exceeded") and isinstance(cost, (int, float)):
+        # The soft cap is logged, never enforced: the line says so and nothing else changes.
+        # It spells whose line was crossed — the head's own --expect-usd or the class figure —
+        # since the two carry different weight for the reader (owner ruling, 2026-09-07). A
+        # record written before soft_src existed has no source to name and reads as the class.
+        line += " · soft-cap: $%.2f over $%.2f (%s)" % (
+            cost, close.get("soft_usd"),
+            "expect" if close.get("soft_src") == "expect" else "class %s" % cls)
     return line
 
 
@@ -1303,6 +1770,7 @@ def run_lane(ctx):
         os.makedirs(os.path.dirname(ctx["progress"]) or ".", exist_ok=True)
     except OSError:
         pass          # the lane's own append will report it; /tmp exists on every platform
+    open_console_for_spawn(run, ctx.get("viewer"))   # before the child: its clocks start below
     started = time.time()
     try:
         process = subprocess.Popen(
@@ -1313,6 +1781,8 @@ def run_lane(ctx):
                                     "event": "lane-closed", "session_id": ctx["session_id"],
                                     "class": ctx["cls"], "exit_class": "spawn-failed",
                                     "error": str(exc), "exit_code": 3,
+                                    "soft_usd": ctx.get("soft_usd"),
+                                    "soft_src": ctx.get("soft_src"), "soft_exceeded": None,
                                     "wrapper_pid": os.getpid()})
         sys.stderr.write("lane.py: could not start the lane process: %s\n" % exc)
         return 3
@@ -1374,6 +1844,8 @@ def run_lane(ctx):
         "duration_s": duration, "subtype": subtype, "is_error": bool(result.get("is_error")),
         "num_turns": result.get("num_turns"), "total_cost_usd": result.get("total_cost_usd"),
         "cost_src": "result",
+        "soft_usd": ctx.get("soft_usd"), "soft_src": ctx.get("soft_src"),
+        "soft_exceeded": soft_check(result.get("total_cost_usd"), ctx.get("soft_usd")),
         "usage": {"modelUsage": result.get("modelUsage"),
                   "peak_context": parsed["peak"], "calls": parsed.get("calls", 0),
                   "first_call_context": parsed.get("first_call_context"),
@@ -1425,6 +1897,8 @@ def close_from_transcript(record_path, run, lane, opened, spawned, home, project
         "duration_s": duration, "subtype": None, "is_error": None,
         "num_turns": parsed.get("calls"), "total_cost_usd": None,
         "cost_src": "transcript-estimate",
+        "soft_usd": opened.get("soft_usd"), "soft_src": opened.get("soft_src"),
+        "soft_exceeded": None,
         "usage": {"modelUsage": None, "peak_context": parsed["peak"],
                   "calls": parsed.get("calls", 0),
                   "first_call_context": parsed.get("first_call_context"),
@@ -1594,7 +2068,90 @@ def detach_spawn(args):
                       session_id=session_id, worker=worker, log_path=paths["detach_log"])
 
 
+# ------------------------------------------------------------- the per-call pick ------------
+
+def pick_sources(throttle, model, effort, row_default, choice_reason):
+    """(model_src, effort_src) for the lane-open line: where each axis's value came from, in the
+    four words the record carries (owner ruling 2026-09-07 17:0x; built 2026-09-08).
+      anchor           under `auto`: no override, or one equal to the row default (the anchor)
+      auto: <text>     under `auto`: an override departing from the anchor; the --choice-reason text
+      throttle <name>  under a hand-set preset: no override, or one equal to the preset's value
+      explicit         under a hand-set preset: a departure; a reason is recorded if given, never required
+    Under `auto` a departure with no --choice-reason (absent or whitespace) is refused exactly as
+    a missing --reason is — exit 2, before any record line, --dry-run included — and the refusal
+    names every axis that departs. An out-of-range value is a departure like any other here; its
+    `outside_options` note stays the caller's."""
+    reason = (choice_reason or "").strip()
+    sources, departures = {}, []
+    for axis, value in (("model", model), ("effort", effort)):
+        anchor = row_default[axis]
+        if value == anchor:
+            sources[axis] = "anchor" if throttle == "auto" else "throttle %s" % throttle
+        elif throttle == "auto":
+            departures.append("--%s %s departs from the anchor %s" % (axis, value, anchor))
+            sources[axis] = "auto: %s" % reason
+        else:
+            sources[axis] = "explicit"
+    if departures and not reason:
+        die("%s under throttle auto; pass --choice-reason" % " and ".join(departures))
+    return sources["model"], sources["effort"]
+
+
+def recorded_source(opened, key):
+    """The pick source a lane-open recorded, or `unrecorded` for a record from before the pick
+    fields (every lane opened before 2026-09-08). A resume makes no new pick: it copies."""
+    value = opened.get(key)
+    return value if isinstance(value, str) and value else "unrecorded"
+
+
+def resolve_spawn_pick(args):
+    """The class row, its tier under the throttle and the per-call pick, resolved before anything
+    else a spawn does: (routing, row, cls, pick). `pick` holds the lane-open fields `throttle`,
+    `throttle_note`, `model`, `effort`, `row_default`, `outside`, `model_src`, `effort_src` and
+    `choice_reason`. Resolving it first is what lets an unreasoned departure under `auto` be
+    refused before the detach, before --dry-run prints and before any record line."""
+    routing_path = args.routing or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                "routing.json")
+    routing = load_routing(routing_path)
+    cls = getattr(args, "class")
+    if cls not in routing["classes"]:
+        die("unknown class `%s` (routing table has: %s)"
+            % (cls, ", ".join(sorted(routing["classes"]))))
+    row = routing["classes"][cls]
+
+    # `auto` is the default preset and the fallback for a missing Settings line (2026-09-08;
+    # `default` until then), in step with throttle.py's active_throttle.
+    throttle = args.throttle or customisation_value("throttle", "auto")
+    throttle_note = None
+    if throttle not in THROTTLES:
+        throttle_note = "unknown throttle %r, treated as `auto`" % throttle
+        sys.stderr.write("lane.py: %s\n" % throttle_note)
+        throttle = "auto"
+    model, effort, model_opts, effort_opts = resolve_tier(routing, row, cls, throttle)
+    row_default = {"model": model, "effort": effort}   # the row's tier under the throttle, before any override (2026-09-06); under `auto` the anchor
+    outside = []
+    if args.model:
+        if args.model not in model_opts:
+            outside.append("model %s outside the class options %s" % (args.model, model_opts))
+        model = args.model
+    if args.effort:
+        if args.effort not in effort_opts:
+            outside.append("effort %s outside the class options %s" % (args.effort, effort_opts))
+        effort = args.effort
+    model_src, effort_src = pick_sources(throttle, model, effort, row_default, args.choice_reason)
+    return routing, row, cls, {
+        "throttle": throttle, "throttle_note": throttle_note, "model": model, "effort": effort,
+        "row_default": row_default, "outside": outside, "model_src": model_src,
+        "effort_src": effort_src, "choice_reason": (args.choice_reason or "").strip() or None}
+
+
 def cmd_spawn(args):
+    # `--reason` is required, and the check is the first thing this command does: an omitted, an
+    # empty and a letterless reason take one refusal, before any record line and before --dry-run
+    # prints anything (register, 2026-09-07). The per-call pick is resolved next, so that an
+    # unreasoned departure under `auto` is refused the same way, before the detach (2026-09-08).
+    require_reason_letter(args.reason)
+    routing, row, cls, pick = resolve_spawn_pick(args)
     if args.detach and not args.dry_run:
         return detach_spawn(args)
     if args.no_wait:
@@ -1605,31 +2162,8 @@ def cmd_spawn(args):
         if not os.path.isfile(os.path.join(home, required)):
             die("lane home %s has no %s — run `lane.py init` first" % (home, required))
 
-    routing_path = args.routing or os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                "routing.json")
-    routing = load_routing(routing_path)
-    cls = getattr(args, "class")
-    if cls not in routing["classes"]:
-        die("unknown class `%s` (routing table has: %s)"
-            % (cls, ", ".join(sorted(routing["classes"]))))
-    row = routing["classes"][cls]
-
-    throttle = args.throttle or customisation_value("throttle", "default")
-    throttle_note = None
-    if throttle not in THROTTLES:
-        throttle_note = "unknown throttle %r, treated as `default`" % throttle
-        sys.stderr.write("lane.py: %s\n" % throttle_note)
-        throttle = "default"
-    model, effort, model_opts, effort_opts = resolve_tier(routing, row, cls, throttle)
-    outside = []
-    if args.model:
-        if args.model not in model_opts:
-            outside.append("model %s outside the class options %s" % (args.model, model_opts))
-        model = args.model
-    if args.effort:
-        if args.effort not in effort_opts:
-            outside.append("effort %s outside the class options %s" % (args.effort, effort_opts))
-        effort = args.effort
+    throttle, throttle_note = pick["throttle"], pick["throttle_note"]
+    model, effort, row_default, outside = pick["model"], pick["effort"], pick["row_default"], pick["outside"]
     mode, mode_src, mode_from = resolve_delegation(args)
 
     if not os.path.isfile(args.brief):
@@ -1762,10 +2296,7 @@ def cmd_spawn(args):
     appended_bytes = len(appended_text.encode("utf-8"))
 
     session_id = args.session_id or str(uuid.uuid4())
-    budget = args.budget_usd
     breadth = customisation_value("breadth", DEFAULT_BREADTH)
-    if budget is None:
-        budget = BREADTH_BUDGET.get(breadth, BREADTH_BUDGET[DEFAULT_BREADTH])
     deadline = args.deadline_s or DEFAULT_DEADLINE_S
     trust = trust_state(home, config_dir)
     if args.require_trust and trust is not True:
@@ -1776,6 +2307,17 @@ def cmd_spawn(args):
     paths = store_paths(args.run, args.lane, args.record)
     record_path = paths["record"]
     silence, silence_src = resolve_silence(args, record_path)
+    # The two-tier caps: the hard stop the CLI enforces, the soft line the close logs. An
+    # explicit --budget-usd raises the hard stop and never lowers it; --expect-usd, the head's
+    # own estimate, becomes the soft line (owner ruling, 2026-09-07).
+    hard_usd, hard_src, class_soft = cost_caps(args.budget_usd, class_cost(row, cls), cls,
+                                               breadth, args.run, record_path)
+    if "class cap kept" in hard_src:
+        sys.stderr.write("lane cap: --budget-usd $%.2f is at or below this class's cap $%.2f, so the class "
+                         "cap is kept (--budget-usd raises only, 2026-09-07); pass --expect-usd to state "
+                         "your estimate as the lane's soft line\n" % (args.budget_usd, hard_usd))
+    soft_usd, soft_src = soft_line(args.expect_usd, class_soft, hard_usd)
+    budget = hard_usd
     projects_root = projects_root_for(args.projects_root, config_dir)
     progress = progress_path(args.run, args.lane)
 
@@ -1822,7 +2364,9 @@ def cmd_spawn(args):
         "ts": now(), "run": args.run, "lane": args.lane, "event": "lane-open",
         "class": cls, "definition": os.path.relpath(definition_path, vault),
         "definition_sha256": definition_sha, "definition_copy": paths["definition_copy"],
-        "model": model, "effort": effort, "throttle": throttle, "tools": tools,
+        "model": model, "effort": effort, "throttle": throttle, "row_default": row_default,
+        "model_src": pick["model_src"], "effort_src": pick["effort_src"],
+        "choice_reason": pick["choice_reason"], "tools": tools,
         "grants": reals(grants), "writes": reals(writes),
         "grants_files": files_of(grants), "writes_files": files_of(writes),
         "add_dirs": add_dirs, "input_dir": paths["input_dir"],
@@ -1837,6 +2381,8 @@ def cmd_spawn(args):
         "appended_file": paths["appended"] if appended_text else None,
         "cache_tier_expected": row.get("cache", "unstated"),
         "session_id": session_id, "budget_usd": budget, "breadth": breadth,
+        "hard_usd": hard_usd, "hard_src": hard_src, "soft_usd": soft_usd,
+        "soft_src": soft_src, "expect_usd": args.expect_usd,
         "max_turns": args.max_turns, "deadline_s": deadline,
         "silence_s": silence, "silence_src": silence_src, "poll_s": args.poll_s,
         "progress_file": progress, "report_words_cap": args.report_words,
@@ -1865,9 +2411,17 @@ def cmd_spawn(args):
         print("settings (%s): allow %s" % (paths["settings"], settings_allow or "none"))
         print("controls checked: %s" % json.dumps(controls_checked))
         print("silence: %s s (%s)" % (silence, silence_src))
+        print("hard cap: $%.2f (%s) · soft line: %s"
+              % (hard_usd, hard_src,
+                 ("$%.2f (%s)" % (soft_usd, soft_src)) if soft_usd is not None
+                 else "none (no class figures and no --expect-usd)"))
         print("brief delivery: %s" % ("prompt argument" if args.prompt_arg else "stdin"))
         print("appended system prompt (%s, %d bytes): %s"
               % (paths["appended"], appended_bytes, ", ".join(appended_names) or "nothing"))
+        print("model_src: %s" % pick["model_src"])
+        print("effort_src: %s" % pick["effort_src"])
+        if pick["choice_reason"]:
+            print("choice_reason: %s" % pick["choice_reason"])
         print("record line (%s):" % record_path)
         print("  " + json.dumps(open_line))
         print("would write: %s · %s · %s · %s/%s"
@@ -1904,8 +2458,8 @@ def cmd_spawn(args):
            "record": record_path, "report_path": paths["report"],
            "projects_root": projects_root, "session_id": session_id, "progress": progress,
            "report_words": args.report_words, "format": args.format,
-           "spawn_event": "lane-spawned", "detached": bool(args.as_worker),
-           "open_line": open_line}
+           "spawn_event": "lane-spawned", "detached": bool(args.as_worker), "viewer": args.viewer,
+           "open_line": open_line, "soft_usd": soft_usd, "soft_src": soft_src}
     return run_lane(ctx)
 
 
@@ -1977,12 +2531,59 @@ def cmd_resume(args):
         print("lane %s/%s: closed on a limit %.0f min ago — the %d-minute cache window is waived "
               "(D29); expect a cold re-read of the lane's context on this first call"
               % (args.run, args.lane, age / 60.0, RESUME_WINDOW_S // 60))
+    # A `budget` close is the CLI's own `--max-budget-usd` stop (`error_max_budget_usd`), and it
+    # is the one close class whose recorded cap must not be re-used: either the CLI's running
+    # total survives the resume and the same cap kills the lane on its first turn, or it does not
+    # and the lane silently takes a second full helping of it. So the caller raises the stop
+    # explicitly, above the figure the lane already spent, or re-spawns (SKILL.md §2a). The guard
+    # is keyed on exit_class, never on a lane or run id, and it refuses before anything is
+    # written. Premise cases: no recorded cap (a torn or pre-class-caps record), a cap that is
+    # not a number, and a --budget-usd equal to the cap rather than above it.
+    after_budget = closed.get("exit_class") == "budget"
+    recorded_cap = None
+    if after_budget:
+        recorded, cap_field = opened.get("hard_usd"), "hard_usd"
+        if recorded is None:
+            recorded, cap_field = opened.get("budget_usd"), "budget_usd"
+        if recorded is None:
+            die("lane %s/%s closed on its budget cap, but its lane-open records neither hard_usd "
+                "nor budget_usd, so the cap it stopped at is unknown and no --budget-usd can be "
+                "shown to clear it — re-spawn the lane instead" % (args.run, args.lane))
+        if isinstance(recorded, bool) or not isinstance(recorded, (int, float)):
+            die("lane %s/%s: lane-open %s is %r, not a number — a budget close cannot be resumed "
+                "against a cap that cannot be read" % (args.run, args.lane, cap_field, recorded))
+        recorded_cap = float(recorded)
+        if args.budget_usd is None or args.budget_usd <= recorded_cap:
+            die("lane %s/%s closed on its budget cap of $%.2f (lane-open %s)%s: a budget close "
+                "resumes only with an explicit --budget-usd ABOVE that figure, since the recorded "
+                "cap either kills the lane again at once or gives it a second full helping"
+                % (args.run, args.lane, recorded_cap, cap_field,
+                   "" if args.budget_usd is None
+                   else ", and --budget-usd $%.2f is not above it" % args.budget_usd))
     if not os.path.isfile(args.brief):
         die("brief file not found: %s" % args.brief)
     brief = read_text(args.brief, "the follow-up brief")
     if not brief.strip():
         die("brief file is empty: %s" % args.brief)
     controls_checked = check_controls(parse_controls(brief), vault)
+
+    # The lane's reason has not changed, so the resumed call is tallied under the letter its spawn
+    # gave: `lane-resumed` records the reason carried from lane-open, and the command needs no flag
+    # of its own. `--reason` is the override for a record whose reason names no letter — one
+    # written before the 2026-09-06 check, or an empty one from before the 2026-09-07 fix — and
+    # never a re-label: against a record that already carries a letter it is refused and the
+    # recorded reason stands. Both refusals come before anything is written.
+    recorded_reason = (opened.get("reason") or "").strip()
+    if reason_letters(recorded_reason):
+        if args.reason.strip():
+            die("lane %s/%s already records the reason %r on its lane-open, and a resume does not "
+                "re-label a lane: --reason overrides only a record whose reason names no "
+                "instrument-rule letter, so the recorded reason stands"
+                % (args.run, args.lane, recorded_reason[:60]))
+        lane_reason, lane_reason_src = recorded_reason, "lane-open"
+    else:
+        require_reason_letter(args.reason)
+        lane_reason, lane_reason_src = args.reason, "--reason (the lane-open records none)"
 
     cls = opened.get("class")
     model, effort = opened.get("model"), opened.get("effort")
@@ -2013,9 +2614,52 @@ def cmd_resume(args):
     if appended and not os.path.isfile(appended):
         die("lane %s/%s: appended file %s is gone" % (args.run, args.lane, appended))
     definition_path, definition_sha, agent = thin_definition(vault, cls, tools, "thin %s lane" % cls)
-    budget = args.budget_usd if args.budget_usd is not None else opened.get("budget_usd")
-    if budget is None:
-        budget = BREADTH_BUDGET[DEFAULT_BREADTH]
+    # The same two-tier rule as spawn: an explicit --budget-usd, else the hard stop the
+    # lane-open recorded (its budget_usd for a record from before the class caps, the breadth
+    # knob's tier for a record with neither), composed with the run's envelope remainder where
+    # that is smaller — a resumed lane may no more spend what the run no longer has than a
+    # fresh one, and the earlier resume read neither the envelope nor the knob (critic findings
+    # F5/F9, 2026-09-07).
+    # Raise-only applies to the recorded cap as it does to the class cap on spawn (owner ruling,
+    # 2026-09-07): an explicit --budget-usd below what the lane already ran under is not a
+    # resume decision, it is a sizing guess, and the recorded cap is kept.
+    if opened.get("hard_usd") is not None:
+        budget, hard_src = opened["hard_usd"], "lane-open hard_usd"
+        label = "the lane-open hard_usd"
+    elif opened.get("budget_usd") is not None:
+        budget, hard_src = opened["budget_usd"], "lane-open budget_usd (a record without hard_usd)"
+        label = "the lane-open budget_usd"
+    else:
+        breadth = customisation_value("breadth", DEFAULT_BREADTH)
+        budget = BREADTH_BUDGET.get(breadth, BREADTH_BUDGET[DEFAULT_BREADTH])
+        hard_src = "breadth-tier (a lane-open without hard_usd or budget_usd)"
+        label = "the breadth tier"
+    remainder, reason, envelope = envelope_remainder(args.run, paths["record"])
+    if remainder is not None and remainder <= 0:
+        if args.budget_usd is None:
+            die("run %s: the envelope has nothing left (remainder $%.2f of $%.2f: %s) — no lane "
+                "resumes on a cap of nothing; raise the envelope or pass --budget-usd with a "
+                "reason" % (args.run, remainder, envelope, reason))
+        budget = float(args.budget_usd)
+        hard_src = ("explicit --budget-usd (override of an exhausted envelope $%.2f, "
+                    "remainder $%.2f)" % (envelope, remainder))
+    else:
+        if remainder is not None and remainder < float(budget):
+            budget, hard_src = remainder, (
+                "envelope remainder $%.2f (envelope $%.2f, spent $%.2f; below %s $%.2f)"
+                % (remainder, envelope, envelope - remainder, label, float(budget)))
+        if args.budget_usd is not None and float(args.budget_usd) > float(budget) and after_budget:
+            budget = float(args.budget_usd)
+            hard_src = ("explicit --budget-usd (raised over a budget close from $%.2f)"
+                        % recorded_cap)
+        else:
+            budget, hard_src = raise_only(args.budget_usd, budget, hard_src, term="resumed")
+            if "cap kept" in hard_src:
+                sys.stderr.write("lane cap: --budget-usd $%.2f is at or below the cap this lane already ran "
+                                 "under, $%.2f, so that cap is kept (--budget-usd raises only, 2026-09-07); "
+                                 "pass --expect-usd to state your estimate as the lane's soft line\n"
+                                 % (args.budget_usd, budget))
+    soft_usd, soft_src = soft_line(args.expect_usd, opened.get("soft_usd"), budget)
     deadline = args.deadline_s or opened.get("deadline_s") or DEFAULT_DEADLINE_S
     if args.silence_s is None:
         silence = opened.get("silence_s")
@@ -2069,14 +2713,53 @@ def cmd_resume(args):
            "projects_root": projects_root, "session_id": session_id, "progress": progress,
            "report_words": args.report_words, "format": args.format,
            "spawn_event": "lane-resumed", "detached": False, "open_line": opened,
-           "spawn_extra": {"brief": brief_abs, "brief_copy": brief_copy, "resume_n": resume_n,
+           "spawn_extra": {"reason": lane_reason, "reason_src": lane_reason_src,
+                           "brief": brief_abs, "brief_copy": brief_copy, "resume_n": resume_n,
                            "resumes_close_ts": closed.get("ts"), "age_s": round(age, 1),
-                           "after_limit": after_limit,
+                           "after_limit": after_limit, "after_budget": after_budget,
                            "controls_checked": controls_checked, "budget_usd": budget,
+                           "hard_usd": budget, "hard_src": hard_src, "soft_usd": soft_usd,
+                           "soft_src": soft_src, "expect_usd": args.expect_usd,
                            "deadline_s": deadline, "silence_s": silence,
-                           "silence_src": silence_src, "definition_sha256": definition_sha},
-           "close_extra": {"resumed": True, "resume_n": resume_n}}
+                           "silence_src": silence_src, "definition_sha256": definition_sha,
+                           # No new pick on a resume: the open's pick fields are copied, and a
+                           # record from before them reads `unrecorded` (2026-09-08).
+                           "model_src": recorded_source(opened, "model_src"),
+                           "effort_src": recorded_source(opened, "effort_src"),
+                           "choice_reason": (opened.get("choice_reason")
+                                             if isinstance(opened.get("choice_reason"), str) else None)},
+           "close_extra": {"resumed": True, "resume_n": resume_n},
+           "soft_usd": soft_usd, "soft_src": soft_src}
     return run_lane(ctx)
+
+
+# ------------------------------------------------------------------ cost-figures ------------
+
+def cmd_cost_figures(args):
+    """Fold the run store's completed lane costs per class and print them; with `--check`,
+    compare them against the routing table's `cost` blocks. Reads and prints; it creates,
+    modifies, moves and deletes nothing, so it is safe to run against a live store, and the
+    fold it prints is the one that would be written into the table by hand.
+
+    Exit 0 when nothing drifts, 1 when any class drifts or is due a first block, 2 on a broken
+    premise (no records directory, no `.jsonl` in it, no completed close in any of them)."""
+    records_dir = args.records or os.path.join(store_root(), "spawn-records")
+    folded, counts = fold_costs(records_dir)
+    table = {}
+    if args.check:
+        routing_path = args.routing or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                    "routing.json")
+        data = load_routing(routing_path)
+        classes = data.get("classes") or {}
+        if not isinstance(classes, dict) or not classes:
+            die("routing table %s carries no classes to check against" % routing_path)
+        for cls, row in classes.items():
+            table[cls] = class_cost(row, cls)   # a malformed block is a premise failure
+    lines, drifted = cost_figures_report(folded, counts, table, args.check, records_dir,
+                                         args.format)
+    for line in lines:
+        print(line)
+    return 1 if (args.check and drifted) else 0
 
 
 # ------------------------------------------------------------------------- cli --------------
@@ -2115,6 +2798,10 @@ def build_parser():
     spawn.add_argument("--brief", required=True)
     spawn.add_argument("--model")
     spawn.add_argument("--effort")
+    spawn.add_argument("--viewer", choices=("terminal", "none"),
+                       help="the run's console window: opened on this spawn when none is alive "
+                            "(default: the grants file's viewer key, else terminal); none opts "
+                            "out, as does AIMYTH_VIEWER=none")
     spawn.add_argument("--grant", action="append", default=[],
                        help="a directory or file the lane may read (repeatable)")
     spawn.add_argument("--write", action="append", default=[],
@@ -2133,10 +2820,33 @@ def build_parser():
                        help="leave the lane core out of the appended file (slices still go in)")
     spawn.add_argument("--append-core", metavar="FILE",
                        help="use this file as the lane core instead of the home's copy")
-    spawn.add_argument("--reason", default="")
+    spawn.add_argument("--reason", default="",
+                       help="REQUIRED: why a lane rather than the head, opening with the "
+                            "instrument-rule letter CLAUDE.md section 2.2 asks for — %s. "
+                            "Omitted, whitespace-only and letterless take one refusal (exit 2), "
+                            "before any record line" % REASON_FORMS)
+    spawn.add_argument("--choice-reason", default="",
+                       help="why THIS model and effort for this task (distinct from --reason, "
+                            "which says why a lane at all). Under throttle auto a --model or "
+                            "--effort departing from the row's anchor is refused without it "
+                            "(exit 2, before any record line); recorded on lane-open as "
+                            "choice_reason and, for a departing axis, as `auto: <text>` in "
+                            "model_src/effort_src. Never required under a hand-set preset")
     spawn.add_argument("--plant", default="")
     spawn.add_argument("--reading-list", default="")
-    spawn.add_argument("--budget-usd", type=float)
+    spawn.add_argument("--budget-usd", type=float,
+                       help="RAISE the hard stop passed as --max-budget-usd above the class's "
+                            "cap from routing.json (the smaller of the run's envelope "
+                            "remainder and the larger of %d x its usual cost and its soft "
+                            "threshold, else the breadth tier's value); a value at or below "
+                            "the class cap is not applied: the class cap is kept and one line says so "
+                            "(2026-09-07). To state your own estimate, use --expect-usd"
+                            % HARD_MULTIPLIER)
+    spawn.add_argument("--expect-usd", type=float,
+                       help="the head's own cost estimate for this lane: it becomes the lane's "
+                            "soft line (logged at the close as soft_usd with soft_src expect, "
+                            "over the class figure), and it is NEVER a stop. Refused above the "
+                            "lane's hard stop, or at or below zero")
     spawn.add_argument("--max-turns", type=int)
     spawn.add_argument("--deadline-s", type=int)
     spawn.add_argument("--baseline-lane", default="",
@@ -2179,16 +2889,48 @@ def build_parser():
 
     resume = sub.add_parser("resume", help="re-enter a finished lane's session with a follow-up "
                                            "brief (D29: after a `limit` close the cache window is "
-                                           "waived and `lane-resumed` records after_limit and age_s)")
+                                           "waived and `lane-resumed` records after_limit and "
+                                           "age_s; after a `budget` close only a raised "
+                                           "--budget-usd resumes the lane)")
     resume.add_argument("--run", required=True)
     resume.add_argument("--lane", required=True)
     resume.add_argument("--brief", required=True)
-    resume.add_argument("--budget-usd", type=float)
+    resume.add_argument("--budget-usd", type=float,
+                        help="RAISE the hard stop for the resumed call above the cap the resume "
+                             "composed (the hard_usd the lane-open recorded, or the run's "
+                             "envelope remainder where that is smaller); a value at or below it "
+                             "is not applied: that cap is kept and one line says so (2026-09-07). "
+                             "REQUIRED, and above the recorded cap, after a `budget` close, "
+                             "which never resumes on the cap that stopped it")
+    resume.add_argument("--expect-usd", type=float,
+                        help="the head's own cost estimate for the resumed call: the lane's "
+                             "soft line, logged at the close and never a stop (same rule as "
+                             "spawn)")
+    resume.add_argument("--reason", default="",
+                        help="NOT needed in the ordinary case: `lane-resumed` carries the reason "
+                             "the lane-open recorded. Pass it only where that record names no "
+                             "instrument-rule letter (one written before the check); against a "
+                             "record that carries one it is refused and the recorded reason stands")
     resume.add_argument("--max-turns", type=int)
     resume.add_argument("--deadline-s", type=int)
     resume.add_argument("--baseline-lane", default="")
     add_wait_flags(resume)
     resume.set_defaults(func=cmd_resume)
+
+    figures = sub.add_parser("cost-figures",
+                             help="fold the run store's completed lane costs per class and "
+                                  "print them (writes nothing); --check compares them with "
+                                  "the routing table's cost blocks")
+    figures.add_argument("--records", help="directory of *.jsonl spawn records (default: the "
+                                           "run store's spawn-records)")
+    figures.add_argument("--routing", help="routing table to check against (default: the one "
+                                           "beside this script)")
+    figures.add_argument("--check", action="store_true",
+                         help="compare each class with its cost block: exit 1 on any drift or "
+                              "a class of %d or more completed lanes with no block"
+                              % COST_FLOOR_N)
+    figures.add_argument("--format", choices=("text", "json"), default="text")
+    figures.set_defaults(func=cmd_cost_figures)
     return parser
 
 

@@ -8,7 +8,11 @@ PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); echo "    ok   — $1"; }
 no(){ FAIL=$((FAIL+1)); echo "  FAIL   — $1"; }
 F="$(mktemp -d)"; trap 'rm -rf "$F"' EXIT
-fresh(){ rm -rf "$F"; mkdir -p "$F/wiki/x" "$F/.claude/skills/t" "$F/.claude/agents" "$F/.claude/skills/x/payload/example/wiki"
+# Every fixture root carries raw/ as well as wiki/: the script applies the 2026-08-26 root
+# assertion (a root without both is refused with exit 2 on stderr), so a fixture without raw/
+# would exercise the guard instead of the case each leg names. The wrong-root leg below keeps
+# its own case by removing wiki/ from a root that does have raw/.
+fresh(){ rm -rf "$F"; mkdir -p "$F/raw" "$F/wiki/x" "$F/.claude/skills/t" "$F/.claude/agents" "$F/.claude/skills/x/payload/example/wiki"
   printf 'x\n' > "$F/wiki/x/Alpha.md"
   printf -- '---\ntitle: "Beta"\naliases: [Bee, "B two"]\n---\nx\n' > "$F/wiki/Beta.md"
   printf -- '---\naliases:\n  - Gam\n---\nx\n' > "$F/wiki/x/Gamma.md"; }
@@ -53,5 +57,14 @@ fresh; printf -- '---\r\naliases: [Cee]\r\n---\r\nx\r\n' > "$F/wiki/Crlf.md"; sk
 expect "CRLF frontmatter aliases resolve" 1 1 'dead'
 fresh; sk 'x'; mv "$F/.claude/skills/t/SKILL.md" "$F/.claude/skills/t/SKILL.md.bak"; python3 "$S" /nonexistent >/dev/null 2>&1; rc=$?
 [ "$rc" = 2 ] && ok "a nonexistent root is a broken premise" || no "a nonexistent root is a broken premise [exit $rc]"
+# The 2026-08-26 root assertion, swept across the lint directory 2026-09-07: raw/ AND wiki/ or
+# refuse. A root holding shipped surfaces and pages but no raw/ is not a vault.
+fresh; rm -rf "$F/raw"; sk '[[Alpha]]'; GOUT="$(python3 "$S" "$F" 2>&1)"; rc=$?
+if [ "$rc" = 2 ] && printf '%s' "$GOUT" | grep -q 'is not a vault root (no raw/ or wiki/)'; then ok "a root with no raw/ is refused, never scanned"
+else no "a root with no raw/ is refused [exit $rc: $GOUT]"; fi
+# Positive control for the refusal above, on the same run: the same tree with raw/ back scans.
+fresh; sk '[[Alpha]]'; COUT="$(python3 "$S" "$F" 2>&1)"; rc=$?
+if [ "$rc" -ne 2 ] && printf '%s' "$COUT" | grep -q 'shipped-links:'; then ok "control: the same fixture WITH raw/ still scans (exit $rc)"
+else no "control: the same fixture with raw/ still scans [exit $rc: $COUT]"; fi
 echo "================  RESULT: $PASS passed, $FAIL failed  ================"
 [ "$FAIL" -eq 0 ]
