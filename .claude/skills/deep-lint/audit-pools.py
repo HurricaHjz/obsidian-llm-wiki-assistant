@@ -22,7 +22,10 @@ What it produces, in the runbook's own line formats so a run copies them verbati
 Rules encoded here (so a run never re-derives them by hand):
   - the split is on the `updated:` FRONTMATTER date, never filesystem mtime and never git
     (cloud sync rewrites mtimes; backups are batched) — deep-lint Step 3;
-  - `flagged:` pages are always audited and cost nothing against the cap (Step 2 read them);
+  - `flagged:` pages are always audited and cost nothing against the cap (Step 2 read them),
+    and every one of them sits in pool A whatever its `updated:` date — the stratum is defined
+    by the flag, not by the window, so a flag written without an `updated:` bump can no longer
+    hide in the cold tail (known-issues 2026-09-08, wiki page writers); the lifted count prints;
   - `confidence: authoritative` pages are always audited and do consume the cap;
   - wikilinks inside fenced code blocks, inline code spans and HTML comments are not links;
     aliases resolve; log.md is history, so it never acts as a link source for the graph; an embed
@@ -412,10 +415,16 @@ def main():
     else:
         pool_a = [p for p in classifiable if p["updated"] >= baseline]
         pool_b = [p for p in classifiable if p["updated"] < baseline]
+    # A flagged page belongs to pool A whatever its date: the flagged stratum below is filled
+    # from pool A, and a page flagged without an `updated:` bump otherwise waits in the tail.
+    lifted = [p for p in pool_b if p["flagged"]]
+    pool_a = pool_a + lifted
+    pool_b = [p for p in pool_b if not p["flagged"]]
 
     result["pools"] = {
         "pool_a": len(pool_a),
         "pool_b": len(pool_b),
+        "flagged_lifted": len(lifted),
         "classifiable": len(classifiable),
         "unclassifiable": [p["rel"] for p in unclassifiable],
         "control_date": str(control_date) if control_date else None,
@@ -692,7 +701,8 @@ def main():
         f"{tier} {result['confidence']['distribution'][tier]}" for tier in VALID_CONFIDENCE))
 
     print("--- POOLS ---")
-    print(f"pool A (changed, updated >= {baseline if baseline else 'n/a — whole vault'}): {len(pool_a)}")
+    print(f"pool A (changed, updated >= {baseline if baseline else 'n/a — whole vault'}): {len(pool_a)}"
+          + (f" · flagged lifted from below the baseline: {len(lifted)}" if lifted else ""))
     print(f"pool B (unchanged): {len(pool_b)}")
     print(f"unclassifiable (no parseable updated:): {len(unclassifiable)}")
     for page in unclassifiable:

@@ -21,6 +21,16 @@ lane rows without a head row, and the feed: no items panel, because no pack name
 draws the same boxed notice and writes the same timeline report. A record that HAS a run-open and
 no items is still the broken premise it always was.
 
+A lane with no close event is not taken on trust. Every open lane's recorded processes — the
+`pid` and `wrapper_pid` its `lane-spawned` or `lane-resumed` carries — are probed with
+`os.kill(pid, 0)` on every frame, and one whose processes have all gone is drawn `✗ dead` in
+the lanes panel and counted as `dead` in the close banner, never `● running`: a lane killed by
+hand writes no `lane-closed`, and the console used to show it running for ever. Only
+`ProcessLookupError` counts as gone; a `PermissionError` (alive, another user's process) and
+any unanswered probe leave the lane running, and an open lane whose record carries no pid at
+all stays running too — an absence is never read as a death. `lane.py kill` is the deliberate
+stop that writes the close this probe stands in for.
+
 At the close the run has the last word on the items: every item that ever started ends with the
 run and reads done, one that never started reads skipped, the overall line carries the verdict,
 and a boxed RUN CLOSED notice with the run's totals follows the final board, the report's path
@@ -338,6 +348,7 @@ class Lane:
         self.item = None
         self.resumes = 0
         self.notes = ""                                        # a stall or an unwatched transcript
+        self.pids = []                                         # what the spawn recorded (see probe_liveness)
         self.home = e.get("cwd") or ""
         self.config_dir = e.get("config_dir")
         self.projects = e.get("projects_root") or projects
@@ -355,6 +366,47 @@ class Lane:
         if e.get("session_id") and e["session_id"] != self.session:
             self.session, self.pos = e["session_id"], 0
             self.transcript = self._transcript()
+        self.note_pids(e)
+
+    def note_pids(self, e):
+        """The processes a spawn or a resume names: the lane's own `pid` and the wrapper's
+        `wrapper_pid`, which `lane.py` writes on both `lane-spawned` and `lane-resumed`. A later
+        spawn or resume of the same lane name replaces them, so the pids in hand are always the
+        latest run's."""
+        pids = []
+        for key in ("pid", "wrapper_pid"):
+            value = e.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                pids.append(value)
+        self.pids = pids
+
+    def probe_liveness(self):
+        """An open lane whose recorded processes have ALL gone is drawn `✗ dead`, never `● running`.
+
+        A lane killed by hand writes no `lane-closed`, and until this probe the console drew it
+        as running for ever. The observable is `os.kill(pid, 0)`: `ProcessLookupError` is the
+        one answer that means gone, `PermissionError` means the process is there and owned by
+        another user, and any other `OSError` means the question was not answered — so only a
+        lane every one of whose pids raised `ProcessLookupError` is called dead. A lane with a
+        live pid, and an open lane whose record carries NO pid at all (a record written before
+        the spawn line, or one from another host), stay `running`: the console never invents a
+        death from an absence. The mark is not sticky against the record — a `lane-closed`
+        arriving later rebuilds the lane and its own exit class wins."""
+        if self.exit != "running" or not self.pids:
+            return
+        for pid in self.pids:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue                                       # this one has gone; check the rest
+            except PermissionError:
+                return                                         # alive, owned by another user
+            except OSError:
+                return                                         # unanswered: never a death on a maybe
+            else:
+                return                                         # alive
+        self.exit = "dead"
+        self.notes = self.notes or "no close event"
 
     def close(self, e):
         self.closed = parse_ts(e.get("ts"))
@@ -367,6 +419,7 @@ class Lane:
         2026-09-07 was leaving it drawn as closed)."""
         self.closed, self.exit, self.cost, self.turns_final = None, "running", None, None
         self.resumes += 1
+        self.note_pids(e)
         if e.get("budget_usd") is not None:
             self.budget = e["budget_usd"]
         if e.get("session_id"):
@@ -511,7 +564,10 @@ class Run:
                 lane.notes = "%s %s" % (ev, e.get("action") or e.get("silent_s") or "")
             elif ev in ("run-open", "run-resume", "head-successor", "head-resumed"):
                 self.heads.append(e)
-                if ev == "head-resumed" and wait_open:
+                # any head start ends an open limit wait: an in-place resume, or the successor the
+                # supervisor starts above the 60 % band (run-20260908-n148n147 drew the wait to the
+                # close because only head-resumed closed it; register entry 2026-09-09)
+                if ev in ("head-resumed", "head-successor", "run-resume") and wait_open:
                     self.waits.append((wait_open, ts))
                     wait_open = None
                 model = head_model(e)
@@ -533,6 +589,10 @@ class Run:
                 self.marks.append((ts, MARKS[ev]))
             if ev in ("stop-condition", "supervisor-stood-down"):
                 self.stopped_note = str(e.get("note") or e.get("action") or ev)[:70]
+        for lane_obj in self.lanes.values():
+            # After every rebuild, so no panel and no count can draw an open lane as running
+            # while its recorded processes have gone; the live loop re-probes each frame.
+            lane_obj.probe_liveness()
         if wait_open:
             self.waits.append((wait_open, None))               # a wait still open ends at "now"
         if self.closed_at and current:
@@ -773,8 +833,14 @@ def render_lanes(run, width):
             mark, c("%-*s" % (LANE_NAME_W, name), col, bold=l.exit == "running"),
             c("%-9s" % fit(l.cls, 9), col), c("%-11s" % model, GREY),
             c("%7s" % elapsed, GREY), c("%4s turns" % turns, GREY), c("%8s" % cost, GREY))
-        tail = (l.last_call or l.notes) if l.exit == "running" else \
-            ("%s%s" % (state, (" · " + l.reason) if l.reason else ""))
+        if l.exit == "running":
+            tail = l.last_call or l.notes
+        elif l.exit == "dead":
+            # No lane-closed will ever arrive for this one: the row says why it stopped moving
+            # rather than the reason it was opened for.
+            tail = "dead · %s" % (l.notes or "no close event")
+        else:
+            tail = "%s%s" % (state, (" · " + l.reason) if l.reason else "")
         tail = fit(tail, max(0, width - 4 - len(stem)))
         lines.append(row(left + c(tail, WHITE if l.exit == "running" else DIM), width))
     return lines
@@ -1655,6 +1721,7 @@ def main(argv=None):
             for l in run.lanes.values():
                 if l.exit == "running":
                     l.poll()
+                    l.probe_liveness()             # a lane can die between two frames
             sys.stdout.write(("\x1b[2J\x1b[H" if not a.plain else "") + "\n".join(frame()) + "\n")
             sys.stdout.flush()
     except KeyboardInterrupt:

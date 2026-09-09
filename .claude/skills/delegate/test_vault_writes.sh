@@ -58,6 +58,17 @@ now_zone() { "$PY" -B -c 'import time; print(time.strftime("%Z") or time.strftim
 # 23:5x as at 00:0x.
 plant_hour() { "$PY" -B -c 'import time; print("%02d" % ((time.localtime().tm_hour + 3) % 24))'; }
 prev_hour() { "$PY" -B -c 'import time; print("%02d" % ((time.localtime().tm_hour - 1) % 24))'; }
+# A SECOND offending hour, distinct from plant_hour's, for the leg that needs two tokens at
+# once. The primitive's tolerance is one hour wide and one-sided: `GRACE_MINUTES = 10`
+# (vault-writes.py:127) with `if clock_minute < GRACE_MINUTES and token_hour == (clock_hour -
+# 1) % HOURS: return False` (vault-writes.py:195), so only the offset -1 (i.e. +23) is ever
+# forgiven, and only while the clock's minute is under ten. The arithmetic: an offset k is
+# safe at every minute of the hour when k mod 24 is neither 0 (the clock's own hour) nor 23
+# (the hour the grace forgives). plant_hour takes k=+3 and this takes k=+5: both are outside
+# the tolerance at every minute, and the two differ, so the two tokens are distinct hours and
+# the leg's two warning lines do not depend on the clock. (`$(prev_hour):45` was k=-1 here
+# until 2026-09-08 and went silent whenever the run began at a minute under ten.)
+other_hour() { "$PY" -B -c 'import time; print("%02d" % ((time.localtime().tm_hour + 5) % 24))'; }
 # Streams kept apart: the warning is specified as a stderr line, and stdout stays the one
 # line a head reads. $SOUT and $SERR hold them.
 SOUT="$W/stdout.txt"
@@ -424,9 +435,17 @@ fixture "$W/fix"
 PLANT="$(plant_hour):3x"
 vws log-append --vault "$VAULT" --action framework --title "t" --changed "again at $PLANT" --conflicts "and at $PLANT" --extra "Meter: $PLANT" --date 2026-09-05
 eq "K13 one token in three arguments earns one line, not three" "$(nlines "$SERR")" "1"
-PLANT2="$(prev_hour):45"
+PLANT2="$(other_hour):45"
 vws log-append --vault "$VAULT" --action framework --title "t" --changed "at $PLANT" --conflicts "c" --extra "Meter: $PLANT2" --date 2026-09-05
 eq "K14 two distinct offending tokens earn two lines" "$(nlines "$SERR")" "2"
+# K14's own premise: the two planted tokens really are two distinct hours, so a leg reading
+# two lines is reading one line each and not one token twice. K13 above is the control for
+# the other direction — one token in three arguments reads one line.
+if [ "${PLANT%%:*}" != "${PLANT2%%:*}" ]; then
+	ok "K14b the two planted tokens name different hours ($PLANT and $PLANT2)"
+else
+	no "K14b the two planted tokens name the same hour ($PLANT and $PLANT2)"
+fi
 
 fixture "$W/fix"
 cp "$LOG" "$W/log.clockdry"

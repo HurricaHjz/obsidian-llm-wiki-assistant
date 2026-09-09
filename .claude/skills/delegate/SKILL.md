@@ -135,7 +135,7 @@ the retry is attributed (brief or lane) in the run record.
 Per-role definitions live in `.claude/agents/` (project scope). The table below is the prose
 rendering of `.claude/skills/delegate/routing.json` (schema 2), the one machine-readable home;
 `python3 .claude/skills/delegate/throttle.py check` asserts every definition against it under the
-active throttle as a lint leg. Two global orders live there and nowhere else — models `sonnet < opus
+active throttle as a lint leg. Two global orders live there and nowhere else — models `haiku < sonnet < opus
 < fable`, efforts `low < medium < high < xhigh < max` — and each row lists the **options** a class
 may use with its default (the anchor under `auto`, 2026-09-08) in bold, the weakest and strongest
 option being that class's floor and ceiling by construction. **The file carries each class's CURRENT
@@ -458,11 +458,14 @@ $18.22 soft threshold — the same head-estimated sizing that killed three build
 - **The figures are a dated snapshot** (`window`, `n`). `lane.py cost-figures --check`
   re-folds the store's completed closes and prints, per class, one of four verdicts: `same`,
   `drift (soft a → b · usual c → d · n e → f)`, `no block (n < 3)`, or `fold due` (a class at
-  three completed lanes without a block); it writes nothing. The tolerance is zero and every
-  completed close moves `n` and often the median, so a drift is expected after any run: the
-  head re-folds the drifted blocks at its next log entry, naming the new figures there, never
-  mid-run. The check's schedule is the deep-lint skill's Step 8 (carried since 2026-09-07); between
-  deep-lints it runs on the owner's word.
+  three completed lanes without a block); it writes nothing. `lane.py cost-figures --fold` is
+  the one path in the command that writes: it folds each drifted class's block back into the
+  table `--routing` names, at that file's own indent and in its own key order, so the diff of a
+  fold is the fields that changed and nothing else, and a fold with nothing drifted writes
+  nothing and says so. The tolerance is zero and every completed close moves `n` and often the
+  median, so a drift is expected after any run: the head folds the drifted blocks at its next
+  log entry, naming the new figures there, never mid-run. The check's schedule is the deep-lint
+  skill's Step 8 (carried since 2026-09-07); between deep-lints it runs on the owner's word.
 
 In-harness lanes have no dollar stop — scope, tier width and the spawn record are the guard
 (known debt, upstream-dependent).

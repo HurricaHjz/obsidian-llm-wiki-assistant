@@ -58,7 +58,25 @@ positive control (§11): zero findings with zero links scanned is a broken probe
   control. A URL, prose provenance (`email: …`, `session: …`) and an entry that declares its own deletion
   (`path (deleted YYYY-MM-DD)`) are counted, never flagged — provenance written as prose is legitimate. An entry the
   parser could not read prints as `(empty or unparsed sources)` inside the same block: read it, since it is the
-  parser's own gap detector, not a dangler.
+  parser's own gap detector, not a dangler. A `~`- or `/`-led entry is provenance **outside the vault** (a run
+  store, a home directory): resolved with `expanduser`, it prints under `OUT-OF-VAULT SOURCES: n present | m missing`
+  — a missing one is a finding in that bucket, never a dangling vault path (register entry 2026-09-08: two false
+  positives per run until then).
+- Beside it, `python3 .claude/skills/lint/check_flag_admissions.py --vault .` (exit 0 = clean, 1 = findings, 2 =
+  premise: not a vault root, or no `wiki/sources/`) lists every page under `wiki/sources/` whose prose or frontmatter
+  comment **admits conversion damage** — the vocabulary `collapsed`, `lost inter-word spaces`, `inter-word`,
+  `space-restored`, `run-together`, `run together`, `verbatim quotation is unavailable`, `lost every chart`, `lost
+  every figure`, `lost every table`, `charts lost`, `figures lost` — while the page carries no **conversion** flag: a
+  `flagged:` line counts only when its own text carries `conversion` (`source conversion suspect …`), so a flag about
+  something else never masks an admission. A damage admission belongs in the flag channel (ingest Step 0 scores every
+  file carrying `converted_by:` and records a `suspect` one in scope `pdf` as `flagged:`), which is the only channel deep-lint reads;
+  the fix for a hit is a `flagged:` line on the page, never a rewrite of the prose — and the flag's end is ingest 3c's
+  terminal state: a repaired conversion scored `clean` in `sources:` plus the dated Provenance sentence, which the
+  probe counts under its `RESOLVED:` line (an admission that also names a `repaired conversion`), never as a finding.
+  It prints its own in-memory controls (a page that must fire; its conversion-flagged twin that must not; a twin
+  flagged for something else that must; a resolved twin) and the count scanned; an ordinary use of `collapsed` in
+  prose is a false positive to read and dismiss in the report, not to silence in the script (register entry
+  2026-09-08, ingest Step 0 conversions, and the folds of the same day).
 - Every script in this directory refuses, in vault mode, a root that is not a vault (no `raw/` + `wiki/`): one `PROBE
   FAILED: <root> is not a vault root (no raw/ or wiki/)` line on stderr and exit 2, so a wrong root can
   never read as a clean vault scan (the 2026-08-26 standard; the register entry of 2026-09-06 that closed it

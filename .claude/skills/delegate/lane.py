@@ -112,6 +112,16 @@ its transcript: `exit_class: watch-closed`, `cost_src: transcript-estimate`, `de
 unknown`. It returns `still-running` (exit 8) after `--max-wait-s` so a head can re-issue it
 as a bounded blocking call.
 
+`kill --run --lane --reason` is the deliberate stop, and the reason it exists is that a lane
+killed by hand from another terminal wrote no `lane-closed` at all and every reader went on
+drawing it as running. It signals the recorded wrapper first (so the wrapper cannot race it to
+a close of its own) and then the lane process, SIGTERM and then SIGKILL after the kill grace
+for each, and writes the close the wrapper never wrote: `exit_class: killed`, the reason, and
+the cost estimated from the transcript the way `watch-closed` estimates it. A pid already gone
+is not a failure — the missing close is the whole point — and one line says so. An unknown
+lane, a lane that never spawned and a lane already closed each refuse with exit 2 and write
+nothing. `watch` stays the interim path for a lane whose wrapper has simply gone.
+
 `--detach` is a double fork: a worker process (its own session, so it survives the caller's
 exit) runs the lane and writes every record line, and the foreground stays as the watch over
 it, exiting with the worker's exit code once `lane-closed` appears; `--detach --no-wait`
@@ -190,8 +200,10 @@ Numbers that decide, each with its derivation
     the spawn prints one line saying so. An envelope with nothing left still refuses every
     spawn, and an explicit `--budget-usd` is still that one case's override. `cost-figures` re-derives every class's figures from the run store
     and `cost-figures --check` compares them with the table (exit 1 on drift), which is what
-    keeps the blocks and the floor of three honest; nothing schedules it — the head runs it,
-    by the delegate skill's instruction.
+    keeps the blocks and the floor of three honest; `cost-figures --fold` then writes the
+    drifted blocks back into that table, at the file's own indent and in its own key order, so
+    a fold touches the fields it changes and nothing else; nothing schedules either — the head
+    runs them, by the delegate skill's instruction.
   - kill grace, 5 s between SIGTERM and SIGKILL to the process group: set by judgement,
     unmeasured — long enough for the CLI to flush its transcript, short enough that a hung
     lane does not hold the head.
@@ -1063,6 +1075,82 @@ def cost_verdict(row, block):
                row["usual_usd"], block.get("n", "absent"), row["n"]), True)
 
 
+def cost_source_text():
+    """The `source` sentence a folded block carries: what the figures are, from where, on what
+    day and by which hand — so a block read a month later carries its own derivation."""
+    return ("the run store's spawn records: the completed lane-closed events of this class with "
+            "a numeric total_cost_usd, folded %s by `lane.py cost-figures --fold`; usual_usd is "
+            "their median, soft_usd their maximum plus %g %% headroom (token-efficiency findings "
+            "2026-09-07, proposal T3), both rounded to two decimals; a class with fewer than "
+            "%d completed lanes carries no block"
+            % (time.strftime("%Y-%m-%d"), round((SOFT_HEADROOM - 1) * 100, 2), COST_FLOOR_N))
+
+
+def file_indent(raw, path):
+    """The indent the file itself keeps, read from its own first indented line.
+
+    The fold used to re-dump the table at a width of its own choosing, so every line of the
+    file changed on every fold and the real change — two numbers — was unfindable in the diff.
+    Reading the indent from the file means a fold touches the fields it changes and nothing
+    else. A file with no indented line at all is a premise failure: there is no width to keep."""
+    found = re.search(r"^([ \t]+)\S", raw, re.M)
+    if not found:
+        die("routing table %s has no indented line to read an indent from — it is not the "
+            "pretty-printed table this fold writes back" % path)
+    return found.group(1)
+
+
+def fold_into_routing(path, folded, data, raw):
+    """Write each drifted class's cost block into the routing table, and return (classes
+    written, the indent kept).
+
+    What is written: for a class at or above the floor, `soft_usd`, `usual_usd`, `n`, `window`
+    and `source`, into the block already there (so any other key of that block, and the order
+    of every key in the file, survive) or as a new `cost` block at the end of the class's own
+    object where it had none. For a class the table carries a block for and the fold now counts
+    fewer than the floor of completed lanes, the block is REMOVED: that is what `--check` calls
+    a drift to `none`. A class the fold has no figures for at all is not touched — this reads
+    the run store, and a class absent from the store is unmeasured, not free.
+
+    How it is written: `json.dumps` at the file's own indent, never `sort_keys` (the table's key
+    order is meaningful and is the file's, not this script's), `ensure_ascii=False` (the table
+    holds `·`, `×` and `§`, and escaping them would rewrite every line that carries one), and
+    through `write_atomic`, so a reader sees the old file or the new one and never a half-written
+    one. Folding a file twice in a row therefore leaves it byte-identical the second time."""
+    classes = data.get("classes") or {}
+    written = []
+    for cls in sorted(classes):
+        row = classes[cls]
+        if not isinstance(row, dict):
+            continue
+        figures = folded.get(cls)
+        block = row.get("cost")
+        if figures is None:
+            continue
+        if figures["n"] < COST_FLOOR_N:
+            if block is not None:
+                del row["cost"]
+                written.append("%s (block removed: n=%d below the floor of %d)"
+                               % (cls, figures["n"], COST_FLOOR_N))
+            continue
+        verdict, is_drift = cost_verdict(figures, class_cost(row, cls))
+        if not is_drift:
+            continue
+        if not isinstance(block, dict):
+            block = {}
+            row["cost"] = block
+        block["soft_usd"] = figures["soft_usd"]
+        block["usual_usd"] = figures["usual_usd"]
+        block["n"] = figures["n"]
+        block["window"] = figures["window"]
+        block["source"] = cost_source_text()
+        written.append("%s (%s)" % (cls, verdict))
+    indent = file_indent(raw, path)
+    if written:
+        write_atomic(path, json.dumps(data, indent=indent, ensure_ascii=False) + "\n")
+    return written, indent
+
+
 def cost_figures_report(folded, counts, table, check, records_dir, fmt):
     """(lines, drifted): what `cost-figures` prints. One line per class, then the run's own
     count line — the positive control of the fold: a zero anywhere in it is visible beside the
@@ -1609,6 +1697,18 @@ def signal_group(pid, sig):
             return False
 
 
+def signal_pid(pid, sig):
+    """One process, never its group. The wrapper shares a process group with whoever started it
+    — a head's own terminal among them — so signalling ITS group would take the caller down with
+    the lane; only a lane process, which the wrapper starts in a session of its own, is safe to
+    signal by group."""
+    try:
+        os.kill(int(pid), sig)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def kill_group(process):
     """SIGTERM the lane's process group, wait the grace, SIGKILL; returns (stdout, stderr)."""
     signal_group(process.pid, signal.SIGTERM)
@@ -1619,15 +1719,18 @@ def kill_group(process):
         return process.communicate()
 
 
-def kill_pid_group(pid):
-    """The same sequence for a lane the wrapper does not own (watch's orphan path)."""
-    signal_group(pid, signal.SIGTERM)
+def kill_pid_group(pid, group=True):
+    """The same sequence for a lane the wrapper does not own (watch's orphan path): SIGTERM,
+    up to KILL_GRACE_S of waiting, then SIGKILL. `group=False` signals the one process instead
+    of its group, which is what `kill` does to a WRAPPER pid — see signal_pid."""
+    send = signal_group if group else signal_pid
+    send(pid, signal.SIGTERM)
     waited = 0.0
     while waited < KILL_GRACE_S and pid_alive(pid):
         time.sleep(0.5)
         waited += 0.5
     if pid_alive(pid):
-        signal_group(pid, signal.SIGKILL)
+        send(pid, signal.SIGKILL)
 
 
 def silence_of(started, transcript, progress, threshold, no_transcript_s):
@@ -2497,6 +2600,90 @@ def cmd_watch(args):
                       args.format, session_id=spawned.get("session_id"))
 
 
+# ------------------------------------------------------------------------ kill --------------
+
+def cmd_kill(args):
+    """Stop a running lane deliberately and close its record, so no lane is ever killed by hand.
+
+    A lane killed from another terminal wrote no `lane-closed`, and every reader of the record
+    — the console above all — went on drawing it as running for ever. This is the deliberate
+    path: it signals the recorded processes, then writes the close the wrapper never got to
+    write, with `exit_class: killed`, the `--reason` the caller gave and the cost estimated
+    from the transcript exactly as the `watch-closed` path estimates it (token totals, no
+    dollar figure: the wrapper holds no price table).
+
+    The order matters. The wrapper is signalled first, so it cannot race this command to write
+    a close of its own, then the lane process, which the wrapper started in a session of its
+    own and which a signal to the wrapper therefore never reaches. The wrapper is signalled as
+    ONE PROCESS and the lane by process GROUP: a wrapper shares its group with whoever started
+    it, so a group signal there would kill the caller too (the suite's kill legs, all in one
+    process group, exited 143 until this was split), while the lane is a session leader and its
+    group holds nothing but the lane and its children.
+
+    The bound: each of the two is SIGTERM, then up to KILL_GRACE_S (5 s) of waiting, then
+    SIGKILL — `kill_pid_group`, the same sequence the stall path uses — so the close is written
+    within 2 x KILL_GRACE_S = 10 s of the call in the worst case, and at once where both
+    processes go on the SIGTERM. The headroom inside the 5 s is the kill grace's own, quoted
+    from its derivation above: long enough for the CLI to flush its transcript, short enough
+    that a hung lane does not hold the head. There is no second bound to set here: this command
+    waits for nothing else.
+
+    Premises (each refuses with exit 2 and writes NOTHING): no record; a lane with no
+    `lane-open` and no spawn in it; a lane whose latest spawn already carries a `lane-closed`.
+    A recorded pid that is already gone is NOT a premise failure — the close is exactly what is
+    missing then — so the close is written and one line on stdout says the pid had gone. Where a
+    record carries two spawns of one lane name, the latest spawn is the lane (`lane_state`), and
+    a close belonging to the earlier spawn does not stand in the way of killing the later one.
+
+    Exit 0 once the close is written; 2 on any premise failure."""
+    paths = store_paths(args.run, args.lane, args.record)
+    if not os.path.isfile(paths["record"]):
+        die("no spawn record at %s" % paths["record"])
+    opened, spawned, closed = lane_state(load_record(paths["record"]), args.lane)
+    if not opened and not spawned:
+        die("lane %s/%s is unknown in %s (no lane-open and no spawn) — nothing was signalled "
+            "and nothing was written" % (args.run, args.lane, paths["record"]))
+    if not spawned:
+        die("lane %s/%s has a lane-open but never spawned in %s — there is no process to kill "
+            "and no close to write" % (args.run, args.lane, paths["record"]))
+    if closed:
+        die("lane %s/%s is already closed (%s at %s) — a second close would double-count it; "
+            "nothing was signalled and nothing was written"
+            % (args.run, args.lane, closed.get("exit_class"), closed.get("ts")))
+    opened = opened or {}
+    wrapper_pid = spawned.get("wrapper_pid")
+    lane_pid = spawned.get("pid")
+    gone = []
+    for name, pid in (("wrapper", wrapper_pid), ("lane", lane_pid)):
+        if not pid:
+            gone.append("%s (no pid recorded)" % name)
+        elif pid_alive(pid) is False:
+            gone.append("%s pid %s" % (name, pid))
+    if wrapper_pid:
+        kill_pid_group(wrapper_pid, group=False)
+    if lane_pid and lane_pid != wrapper_pid:
+        kill_pid_group(lane_pid)
+    home = os.path.realpath(os.path.expanduser(args.home or opened.get("cwd") or default_home()))
+    projects_root = projects_root_for(args.projects_root or opened.get("projects_root"),
+                                      opened.get("config_dir"))
+    note = "killed by lane.py kill: %s" % args.reason
+    close_line = close_from_transcript(
+        paths["record"], args.run, args.lane, opened, spawned, home, projects_root, note,
+        args.report_words,
+        extra={"exit_class": "killed", "exit_code": EXIT_CODES.get("killed", 3),
+               "reason": args.reason, "killed_by": "lane.py kill",
+               "killed_pids": {"wrapper": wrapper_pid, "lane": lane_pid},
+               "kill_grace_s": KILL_GRACE_S})
+    if gone:
+        print("kill: already gone before the signal: %s; the close is written anyway (that "
+              "missing close is the defect this command exists for)" % ", ".join(gone))
+    print(summary_of(args.run, args.lane, close_line.get("class") or opened.get("class"),
+                     opened.get("model"), opened.get("effort"), close_line))
+    print("kill: lane %s/%s closed as killed (%s); record %s"
+          % (args.run, args.lane, args.reason, paths["record"]))
+    return 0
+
+
 # ---------------------------------------------------------------------- resume --------------
 
 def cmd_resume(args):
@@ -2737,28 +2924,54 @@ def cmd_resume(args):
 
 def cmd_cost_figures(args):
     """Fold the run store's completed lane costs per class and print them; with `--check`,
-    compare them against the routing table's `cost` blocks. Reads and prints; it creates,
-    modifies, moves and deletes nothing, so it is safe to run against a live store, and the
-    fold it prints is the one that would be written into the table by hand.
+    compare them against the routing table's `cost` blocks; with `--fold`, write the drifted
+    ones back into that table.
 
-    Exit 0 when nothing drifts, 1 when any class drifts or is due a first block, 2 on a broken
-    premise (no records directory, no `.jsonl` in it, no completed close in any of them)."""
+    Without `--fold` it reads and prints and nothing else — it creates, modifies, moves and
+    deletes nothing, so it is safe to run against a live store. `--fold` is the one writing
+    path, and it writes ONE file: the routing table `--routing` names (else the one beside this
+    script). It writes at the file's own indent and never sorts its keys, so the diff of a fold
+    is the fields that changed and nothing else; a fold with nothing drifted writes nothing at
+    all and says so; and a second fold of an already-folded file is a no-op, since every class
+    then reads `same`. The re-fold used to be a hand step of the head, and a hand step that
+    re-dumped the file at a different width made every line change on every fold.
+
+    Exit 0 when nothing drifts, 1 when `--check` alone finds a drift or a class due its first
+    block (with `--fold` the drift has been closed, so a successful fold exits 0), 2 on a broken
+    premise (no records directory, no `.jsonl` in it, no completed close in any of them, an
+    unreadable or malformed routing table, a table with no indent to keep)."""
     records_dir = args.records or os.path.join(store_root(), "spawn-records")
     folded, counts = fold_costs(records_dir)
-    table = {}
-    if args.check:
+    table, data, raw, routing_path = {}, None, None, None
+    if args.check or args.fold:
         routing_path = args.routing or os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                     "routing.json")
+        raw = read_text(routing_path, "the routing table")
         data = load_routing(routing_path)
         classes = data.get("classes") or {}
         if not isinstance(classes, dict) or not classes:
             die("routing table %s carries no classes to check against" % routing_path)
         for cls, row in classes.items():
             table[cls] = class_cost(row, cls)   # a malformed block is a premise failure
-    lines, drifted = cost_figures_report(folded, counts, table, args.check, records_dir,
-                                         args.format)
+    lines, drifted = cost_figures_report(folded, counts, table, args.check or args.fold,
+                                         records_dir, args.format)
     for line in lines:
         print(line)
+    if args.fold:
+        written, indent = fold_into_routing(routing_path, folded, data, raw)
+        if written:
+            said = ("cost-figures --fold: wrote %d class block(s) into %s at the file's own "
+                    "indent (%d character(s)): %s"
+                    % (len(written), routing_path, len(indent), " · ".join(written)))
+        else:
+            said = "cost-figures --fold: nothing drifted; %s was not written to" % routing_path
+        # Under --format json stdout is one object a caller parses, so the fold's own line goes
+        # to stderr rather than breaking it.
+        if args.format == "json":
+            sys.stderr.write(said + "\n")
+        else:
+            print(said)
+        return 0
     return 1 if (args.check and drifted) else 0
 
 
@@ -2887,6 +3100,22 @@ def build_parser():
     add_wait_flags(watch)
     watch.set_defaults(func=cmd_watch)
 
+    kill = sub.add_parser("kill", help="stop a running lane and write its lane-closed with "
+                                       "exit_class killed (never kill a lane by hand)")
+    kill.add_argument("--run", required=True)
+    kill.add_argument("--lane", required=True)
+    kill.add_argument("--reason", required=True,
+                      help="why the lane is being stopped, in the caller's own words; it is "
+                           "written into the close line and printed. REQUIRED: a kill with no "
+                           "reason on the record is the hand kill this command replaces")
+    kill.add_argument("--report-words", type=int, default=REPORT_WORDS,
+                      help="words of the lane's last report printed to stdout (default %d)"
+                           % REPORT_WORDS)
+    kill.add_argument("--record", help="spawn record path (default: the run store)")
+    kill.add_argument("--projects-root")
+    kill.add_argument("--home")
+    kill.set_defaults(func=cmd_kill)
+
     resume = sub.add_parser("resume", help="re-enter a finished lane's session with a follow-up "
                                            "brief (D29: after a `limit` close the cache window is "
                                            "waived and `lane-resumed` records after_limit and "
@@ -2919,8 +3148,9 @@ def build_parser():
 
     figures = sub.add_parser("cost-figures",
                              help="fold the run store's completed lane costs per class and "
-                                  "print them (writes nothing); --check compares them with "
-                                  "the routing table's cost blocks")
+                                  "print them (writes nothing without --fold); --check "
+                                  "compares them with the routing table's cost blocks and "
+                                  "--fold writes the drifted ones back into that table")
     figures.add_argument("--records", help="directory of *.jsonl spawn records (default: the "
                                            "run store's spawn-records)")
     figures.add_argument("--routing", help="routing table to check against (default: the one "
@@ -2929,6 +3159,12 @@ def build_parser():
                          help="compare each class with its cost block: exit 1 on any drift or "
                               "a class of %d or more completed lanes with no block"
                               % COST_FLOOR_N)
+    figures.add_argument("--fold", action="store_true",
+                         help="WRITES: fold every drifted class's figures back into the "
+                              "routing table --routing names, at the file's own indent and in "
+                              "its own key order, so the diff is the fields that changed; "
+                              "nothing drifted writes nothing. This is the only path in "
+                              "`cost-figures` that writes at all")
     figures.add_argument("--format", choices=("text", "json"), default="text")
     figures.set_defaults(func=cmd_cost_figures)
     return parser

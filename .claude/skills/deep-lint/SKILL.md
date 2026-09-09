@@ -105,7 +105,7 @@ Collect the query-time freshness flags accumulated since the last run — one ch
 `grep -rn "^flagged:" wiki --include='*.md'` (glob quoted — unquoted it breaks under zsh; **verify
 the probe against a known positive before trusting an empty result**, per CLAUDE.md §11). For each flagged page: re-read it, resolve the
 suspicion (update the page · re-grade its `confidence` · re-ingest its source via §3.1 tools ·
-or clear a false alarm), **remove the `flagged:` line**, and list the resolution in the report.
+or clear a false alarm) — a `source conversion suspect` flag resolves only by ingest 3c's terminal state (a repaired conversion scored `clean` joins `sources:` and the page's `## Summary` ends with the dated Provenance sentence); a re-read alone is never that resolution (2026-09-09) —, **remove the `flagged:` line**, and list the resolution in the report.
 The ledger is the run's first LLM-read priority.
 - **Known-issues register (framework defects):** read `wiki/developments/known-issues.md` — a missing
   file means nothing has been captured yet (the register is recreated at capture time, not here). For
@@ -154,7 +154,11 @@ states that report `n/a`, not failures.
   their `updated:` on 2026-08-26, one by two months) and backups are batched, so many pages share one
   commit date — while every page carries `updated:` (623/623, same measurement). The rule therefore has
   no "mtime/git unavailable" failure mode: it consults neither.
-  - **Pool A — changed** (`updated` ≥ baseline). **Cap: 40 new page reads.** Fill in this order:
+  - **Pool A — changed** (`updated` ≥ baseline, **plus every `flagged:` page whatever its `updated:`** — the
+    stratum is defined by the flag, not the window; `audit-pools.py` lifts such pages out of the tail and prints
+    `flagged lifted from below the baseline: n`, so a flag written without an `updated:` bump is still read; the
+    Stop hook now stamps a frontmatter-only `flagged:` add, change or removal, so the lift is the belt for pages
+    flagged before it — 2026-09-08). **Cap: 40 new page reads.** Fill in this order:
     1. **Always — `flagged:` pages.** Step 2 already read and resolved them, so they count toward the
        reported total at **zero** extra cost and never consume the cap.
     2. **Always — `confidence: authoritative` pages, in full.** Highest blast radius (`query` weights the
@@ -313,9 +317,11 @@ record. Monitor №15's cost-per-run series is then `grep -n 'billed (' wiki/log
 `deep-lint |` entries. In the same step run
 `python3 -B .claude/skills/delegate/lane.py cost-figures --check 2>&1` (exit 0 when every block
 reads `same`, 1 on any drift or fold due — the expected case after a run — and 2 with `PROBE
-FAILED` on stderr) and put its per-class lines under `### Cost`: `same` needs nothing; a `drift` is re-folded by the head into `routing.json`'s
-`cost` block at this run's log entry (the delegate skill §2a rule: the rule unchanged, the figures
-refreshed, the new figures named in the entry); a `fold due` (a class newly at three completed
+FAILED` on stderr) and put its per-class lines under `### Cost`: `same` needs nothing; a `drift` is folded back into `routing.json`'s
+`cost` block at this run's log entry with `python3 -B .claude/skills/delegate/lane.py cost-figures
+--fold`, which writes each drifted block at the file's own indent and in its own key order, so the
+commit's diff is the figures that changed and nothing else (the delegate skill §2a rule: the rule
+unchanged, the figures refreshed, the new figures named in the entry); a `fold due` (a class newly at three completed
 lanes, so a new cap) is reported for the owner, never added here; `PROBE FAILED` is quoted as the
 check's own premise failure.
 

@@ -1131,6 +1131,121 @@ if [ "$RC" = 8 ] && [ "$(events "$F/rec-wl.jsonl" unwatched)" = 1 ] && [ "$(even
   ok "watch with a threshold but no transcript to read writes one unwatched event and kills nothing"
 else no "the unwatched path  [exit $RC, unwatched $(events "$F/rec-wl.jsonl" unwatched): $WL]"; fi
 
+# kill ------------------------------------------------------------------------------------------
+# The deliberate stop. A lane killed by hand wrote no lane-closed and every reader went on
+# drawing it as running, so `kill` signals the recorded processes and writes the close itself.
+# Every count below parses the record line by line: a key-pattern grep would count the same
+# string appearing inside another field's value.
+jevents(){ # record, event -> how many parsed lines carry that event
+  "$PY" - "$1" "$2" <<'JEVENTS_TERMINATOR'
+import json, sys
+n = 0
+for line in open(sys.argv[1], encoding="utf-8"):
+    if not line.strip():
+        continue
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    if isinstance(record, dict) and record.get("event") == sys.argv[2]:
+        n += 1
+print(n)
+JEVENTS_TERMINATOR
+}
+# The liveness probe of these legs, with its stderr kept rather than dropped: `kill -0` on a
+# missing binary would exit non-zero too, and a bare `! kill -0` would then read that as `the
+# process is gone`. Every use below is paired with the opposite answer on the same run.
+alive(){ if kill -0 "$1" 2>"$F/kill0.err"; then echo yes; else echo no; fi; }
+killrec(){ # record path, run, lane, session, pid: the two lines a spawned lane leaves behind
+  printf '{"ts": "%s", "run": "%s", "lane": "%s", "event": "lane-open", "class": "verifier", "model": "sonnet", "effort": "high", "session_id": "%s", "deadline_s": 3600, "cwd": "%s", "projects_root": "%s"}\n' \
+    "$TS" "$2" "$3" "$4" "$LHOME" "$PROJ" > "$1"
+  printf '{"ts": "%s", "run": "%s", "lane": "%s", "event": "lane-spawned", "session_id": "%s", "pid": %s, "wrapper_pid": %s}\n' \
+    "$TS" "$2" "$3" "$4" "$5" "$5" >> "$1"
+}
+TS=$(date +%Y-%m-%dT%H:%M:%S%z)
+mkdir -p "$PROJ/$DASHED"
+"$PY" - "$PROJ/$DASHED/fixture-killed.jsonl" <<'KILLED_TRANSCRIPT_TERMINATOR'
+import json, sys
+usage = {"input_tokens": 7, "cache_creation_input_tokens": 120, "cache_read_input_tokens": 3000,
+         "output_tokens": 40}
+with open(sys.argv[1], "w") as h:
+    h.write(json.dumps({"type": "assistant", "effort": "high", "message": {
+        "id": "k1", "model": "claude-sonnet-5", "role": "assistant", "usage": usage,
+        "content": [{"type": "text", "text": "killed lane report text KILLED-4242"}]}}) + "\n")
+KILLED_TRANSCRIPT_TERMINATOR
+sleep 30 & KPID=$!
+killrec "$F/rec-k1.jsonl" run-test-k1 K1 fixture-killed "$KPID"
+KBEFORE=$(alive "$KPID")           # the same probe's other answer, one line before the kill
+K1=$($LANEV "$PY" "$LANE" kill --run run-test-k1 --lane K1 --record "$F/rec-k1.jsonl" \
+     --reason "the head stopped it: the brief named the wrong file" 2>&1); RC=$?
+sleep 1
+KAFTER=$(alive "$KPID")
+if [ "$RC" = 0 ] && [ "$(jevents "$F/rec-k1.jsonl" lane-closed)" = 1 ] \
+   && [ "$(recfield "$F/rec-k1.jsonl" lane-closed exit_class)" = '"killed"' ] \
+   && [ "$(recfield "$F/rec-k1.jsonl" lane-closed exit_code)" = 3 ] \
+   && [ "$(recfield "$F/rec-k1.jsonl" lane-closed killed_by)" = '"lane.py kill"' ] \
+   && [ "$(recfield "$F/rec-k1.jsonl" lane-closed cost_src)" = '"transcript-estimate"' ] \
+   && printf '%s' "$(recfield "$F/rec-k1.jsonl" lane-closed reason)" | grep -q 'the wrong file' \
+   && grep -q 'KILLED-4242' "$STORE/spawn-records/run-test-k1-report-K1.md" \
+   && [ "$KBEFORE" = yes ] && [ "$KAFTER" = no ]; then
+  ok "kill: a running lane is signalled and closed with exit_class killed, the reason, the transcript estimate and its report persisted; the process was alive before the call and is gone after it"
+else no "kill on a live lane  [exit $RC, closes $(jevents "$F/rec-k1.jsonl" lane-closed), class $(recfield "$F/rec-k1.jsonl" lane-closed exit_class), alive before/after $KBEFORE/$KAFTER: $(printf '%s' "$K1" | head -2 | tr '\n' ' ')]"; fi
+if [ "$(recfield "$F/rec-k1.jsonl" lane-closed kill_grace_s)" = 5 ] \
+   && printf '%s' "$K1" | grep -q '^lane run-test-k1/K1: .* killed '; then
+  ok "kill: the close records the grace it waited and the command prints the lane's summary line"
+else no "the kill summary  [grace $(recfield "$F/rec-k1.jsonl" lane-closed kill_grace_s): $(printf '%s' "$K1" | head -1)]"; fi
+# premise: a lane the record does not carry. Nothing is signalled and nothing is written.
+KN=$(wc -l < "$F/rec-k1.jsonl" | tr -d ' ')
+K2=$($LANEV "$PY" "$LANE" kill --run run-test-k1 --lane NOSUCH --record "$F/rec-k1.jsonl" \
+     --reason "a lane that is not there" 2>&1); RC=$?
+if [ "$RC" = 2 ] && printf '%s' "$K2" | grep -q 'is unknown in' \
+   && [ "$(wc -l < "$F/rec-k1.jsonl" | tr -d ' ')" = "$KN" ]; then
+  ok "kill: an unknown lane refuses (exit 2) and writes nothing (the record's line count is unchanged)"
+else no "kill on an unknown lane  [exit $RC, lines $KN -> $(wc -l < "$F/rec-k1.jsonl" | tr -d ' '): $(printf '%s' "$K2" | head -1)]"; fi
+# premise: a lane already closed — the one above, killed a moment ago.
+K3=$($LANEV "$PY" "$LANE" kill --run run-test-k1 --lane K1 --record "$F/rec-k1.jsonl" \
+     --reason "a second kill of the same lane" 2>&1); RC=$?
+if [ "$RC" = 2 ] && printf '%s' "$K3" | grep -q 'already closed' \
+   && [ "$(jevents "$F/rec-k1.jsonl" lane-closed)" = 1 ] \
+   && [ "$(wc -l < "$F/rec-k1.jsonl" | tr -d ' ')" = "$KN" ]; then
+  ok "kill: a lane already closed refuses (exit 2) and writes no second close (still one lane-closed)"
+else no "kill on a closed lane  [exit $RC, closes $(jevents "$F/rec-k1.jsonl" lane-closed): $(printf '%s' "$K3" | head -1)]"; fi
+# premise: --reason is not optional. argparse refuses before any record is read.
+K4=$($LANEV "$PY" "$LANE" kill --run run-test-k1 --lane K1 --record "$F/rec-k1.jsonl" 2>&1); RC=$?
+if [ "$RC" = 2 ] && printf '%s' "$K4" | grep -q 'reason' \
+   && [ "$(wc -l < "$F/rec-k1.jsonl" | tr -d ' ')" = "$KN" ]; then
+  ok "kill: a kill with no --reason is refused (exit 2), so no kill reaches the record unexplained"
+else no "kill without a reason  [exit $RC: $(printf '%s' "$K4" | head -1)]"; fi
+# a recorded pid that has already gone: NOT a premise failure — the missing close is the point.
+sh -c 'exit 0' & GONEPID=$!; wait "$GONEPID"
+killrec "$F/rec-k5.jsonl" run-test-k5 K5 fixture-killed "$GONEPID"
+K5=$($LANEV "$PY" "$LANE" kill --run run-test-k5 --lane K5 --record "$F/rec-k5.jsonl" \
+     --reason "killed by hand from another terminal" 2>&1); RC=$?
+if [ "$RC" = 0 ] && [ "$(jevents "$F/rec-k5.jsonl" lane-closed)" = 1 ] \
+   && [ "$(recfield "$F/rec-k5.jsonl" lane-closed exit_class)" = '"killed"' ] \
+   && printf '%s' "$K5" | grep -q 'already gone before the signal' \
+   && printf '%s' "$K5" | grep -q 'the close is written anyway'; then
+  ok "kill: a lane whose recorded pid has already gone is still closed, and one line on stdout says the pid had gone"
+else no "kill on a gone pid  [exit $RC, closes $(jevents "$F/rec-k5.jsonl" lane-closed): $(printf '%s' "$K5" | head -2 | tr '\n' ' ')]"; fi
+# two spawns of one lane name: the LAST spawn is the lane, and the earlier spawn's close does
+# not stand in the way. The first spawn's process must survive, or the wrong pid was signalled.
+sleep 30 & OLDPID=$!
+sleep 30 & NEWPID=$!
+killrec "$F/rec-k6.jsonl" run-test-k6 K6 fixture-killed "$OLDPID"
+printf '{"ts": "%s", "run": "run-test-k6", "lane": "K6", "event": "lane-closed", "session_id": "fixture-killed", "exit_class": "completed", "exit_code": 0, "total_cost_usd": 0.5}\n' "$TS" >> "$F/rec-k6.jsonl"
+printf '{"ts": "%s", "run": "run-test-k6", "lane": "K6", "event": "lane-open", "class": "verifier", "model": "sonnet", "effort": "high", "session_id": "fixture-killed", "deadline_s": 3600, "cwd": "%s", "projects_root": "%s"}\n' "$TS" "$LHOME" "$PROJ" >> "$F/rec-k6.jsonl"
+printf '{"ts": "%s", "run": "run-test-k6", "lane": "K6", "event": "lane-spawned", "session_id": "fixture-killed", "pid": %s, "wrapper_pid": %s}\n' "$TS" "$NEWPID" "$NEWPID" >> "$F/rec-k6.jsonl"
+K6=$($LANEV "$PY" "$LANE" kill --run run-test-k6 --lane K6 --record "$F/rec-k6.jsonl" \
+     --reason "the second spawn is the one running" 2>&1); RC=$?
+sleep 1
+K6PIDS=$(recfield "$F/rec-k6.jsonl" lane-closed killed_pids)
+if [ "$RC" = 0 ] && [ "$(jevents "$F/rec-k6.jsonl" lane-closed)" = 2 ] \
+   && printf '%s' "$K6PIDS" | grep -q "\"lane\": $NEWPID" \
+   && [ "$(alive "$NEWPID")" = no ] && [ "$(alive "$OLDPID")" = yes ]; then
+  ok "kill: with two spawns of one lane name the LAST spawn is the lane — its pid is signalled, the earlier spawn's process is untouched (the control), and the earlier close does not block the kill"
+else no "kill across two spawns  [exit $RC, closes $(jevents "$F/rec-k6.jsonl" lane-closed), pids $K6PIDS: $(printf '%s' "$K6" | head -1)]"; fi
+kill "$OLDPID" 2>"$F/kill0.err" || true    # the fixture's survivor: tidied away, not asserted on
+
 # resume ----------------------------------------------------------------------------------------
 printf 'Follow-up: say more.\n' > "$F/brief-follow.md"
 RS=$($LANEV "$PY" "$LANE" resume --run run-test-b --lane L2 --brief "$F/brief-follow.md" --record "$F/rec-b.jsonl" \
@@ -2372,6 +2487,98 @@ printf '\n' >> "$FIGT/same.json"; FM3=$(figman)
 if [ -n "$FM1" ] && [ "$FM1" = "$FM2" ] && [ "$FM2" != "$FM3" ] && [ "$FIGN1" = 5 ]; then
   ok "cost-figures writes nothing: three runs (fold, check, json) leave the record store and the tables byte-identical and still five files (control: the same manifest catches the one byte this leg planted afterwards)"
 else no "cost-figures write-nothing manifest  [files $FIGN1, changed under the runs: $([ "$FM1" = "$FM2" ] && echo no || echo yes), control $([ "$FM2" != "$FM3" ] && echo hit || echo missed)]"; fi
+
+# --fold: the one writing path. Every leg here works on a COPY under its own directory, so the
+# manifest leg above keeps its meaning — those three runs still write nothing. The fixture
+# tables are dumped at indent 1 (see the fixture above), which is not the width any re-dump
+# here would pick by itself: that is what makes the indent legs real.
+FIGF="$F/figfold"; mkdir -p "$FIGF"
+cp "$FIGT/drift.json" "$FIGF/drift-0.json"
+cp "$FIGT/drift.json" "$FIGF/drift-1.json"
+FOLD1=$(figures --routing "$FIGF/drift-1.json" --fold 2>&1); RC=$?
+cp "$FIGF/drift-1.json" "$FIGF/after-first.json"
+FOLD2=$(figures --routing "$FIGF/drift-1.json" --fold 2>&1); RC2=$?
+if [ "$RC" = 0 ] && [ "$RC2" = 0 ] \
+   && diff "$FIGF/after-first.json" "$FIGF/drift-1.json" > "$F/fold-second.diff" \
+   && [ ! -s "$F/fold-second.diff" ] \
+   && has "$FOLD1" 'wrote 1 class block(s)' && has "$FOLD2" 'nothing drifted'; then
+  ok "cost-figures --fold is idempotent: the second fold of an already-folded table reports nothing drifted and the diff between the two results is empty"
+else no "the second fold changed the file  [exits $RC/$RC2, diff $(wc -l < "$F/fold-second.diff" | tr -d ' ') lines] $(printf '%s' "$FOLD2" | tr '\n' '|')"; fi
+# The bound on what one folded class may touch. The planted drift is beta's `usual_usd` alone,
+# and the fixture's block carries neither `window` nor `source`, so the fold's whole diff is:
+# two lines removed (the old `usual_usd`, and `n` because it gains a comma once fields follow
+# it), four written (the new `usual_usd`, `n,`, `window`, `source`), and the closing `}` re-read
+# because the fixture was dumped with no newline at the end of the file and every table this
+# writes carries one. 2 + 4 + 2 = 8, and the leg refuses anything above it: a re-dump at another
+# width would put every one of the file's ~40 lines in the diff.
+diff "$FIGF/drift-0.json" "$FIGF/after-first.json" > "$F/fold-first.diff"
+FOLDCH=$(grep -c '^[<>]' "$F/fold-first.diff"); [ -n "$FOLDCH" ] || FOLDCH=0
+FOLDALPHA=$(grep -c '3.75' "$F/fold-first.diff"); [ -n "$FOLDALPHA" ] || FOLDALPHA=0
+if [ "$FOLDCH" -le 8 ] && [ "$FOLDCH" -ge 4 ] && [ "$FOLDALPHA" = 0 ] \
+   && grep -q '^> *"usual_usd": 0.5,' "$F/fold-first.diff"; then
+  ok "cost-figures --fold touches only the drifted class's block: $FOLDCH changed lines against a bound of 8, none of them the untouched class's (the control: alpha's figures appear nowhere in the diff)"
+else no "the fold's diff is too wide  [$FOLDCH changed lines, alpha lines $FOLDALPHA] $(head -6 "$F/fold-first.diff" | tr '\n' '|')"; fi
+# The indent is the file's own, not this script's: the folded file is what a re-dump AT THE
+# FIXTURE'S OWN WIDTH gives, and is not what one at the next width up gives.
+FOLDIND=$("$PY" - "$FIGF/drift-1.json" <<'FOLDIND_TERMINATOR'
+import json, sys
+raw = open(sys.argv[1], encoding="utf-8").read()
+data = json.loads(raw)
+same = json.dumps(data, indent=1, ensure_ascii=False) + "\n"     # the fixture's own width
+wider = json.dumps(data, indent=2, ensure_ascii=False) + "\n"    # the width a re-dump picked
+print("kept" if raw == same else "widened" if raw == wider else "neither")
+FOLDIND_TERMINATOR
+)
+FOLDORD=$("$PY" - "$FIGF/drift-1.json" <<'FOLDORD_TERMINATOR'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+print(",".join(list(data)) + "|" + ",".join(list(data["classes"]))
+      + "|" + ",".join(list(data["classes"]["beta"]["cost"])))
+FOLDORD_TERMINATOR
+)
+if [ "$FOLDIND" = kept ] \
+   && [ "$FOLDORD" = "schema,order,classes|alpha,beta,gamma|soft_usd,usual_usd,n,window,source" ]; then
+  ok "cost-figures --fold keeps the file's own indent (the folded file is the fixture's one-space width, not the wider one the re-fold used to pick) and its key order: the new fields are appended, nothing is sorted"
+else no "the fold rewrote the file's shape  [indent $FOLDIND, order $FOLDORD]"; fi
+# Nothing drifted: no write at all, and the file is byte-identical afterwards.
+cp "$FIGT/drift.json" "$FIGF/same-1.json"      # `drift.json` differs from `same.json` in one
+"$PY" - "$FIGF/same-1.json" <<'SAMEFIX_TERMINATOR'
+import json, sys                                # field only; put it back and nothing drifts
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+data["classes"]["beta"]["cost"]["usual_usd"] = 0.5
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=1)
+SAMEFIX_TERMINATOR
+SAMESUM=$(shasum "$FIGF/same-1.json" | cut -d' ' -f1)
+FOLD3=$(figures --routing "$FIGF/same-1.json" --fold 2>&1); RC=$?
+if [ "$RC" = 0 ] && has "$FOLD3" 'nothing drifted' \
+   && [ "$(shasum "$FIGF/same-1.json" | cut -d' ' -f1)" = "$SAMESUM" ]; then
+  ok "cost-figures --fold with nothing drifted writes nothing and says so (the table's checksum is unchanged; the drifted table above is the control)"
+else no "the fold wrote an undrifted table  [exit $RC] $(printf '%s' "$FOLD3" | tr '\n' '|')"; fi
+# A class under the floor that still carries a block: the fold removes it, which is what
+# --check's `drift (… → none)` says should happen.
+cp "$FIGT/gaps.json" "$FIGF/gaps-1.json"
+FOLD4=$(figures --routing "$FIGF/gaps-1.json" --fold 2>&1); RC=$?
+GAPSGAMMA=$("$PY" -c 'import json, sys; print("cost" in json.load(open(sys.argv[1], encoding="utf-8"))["classes"]["gamma"])' "$FIGF/gaps-1.json")
+GAPSALPHA=$("$PY" -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["classes"]["alpha"]["cost"]["usual_usd"])' "$FIGF/gaps-1.json")
+if [ "$RC" = 0 ] && [ "$GAPSGAMMA" = False ] && [ "$GAPSALPHA" = 2.0 ] \
+   && has "$FOLD4" 'block removed'; then
+  ok "cost-figures --fold gives a class over the floor its first block and removes the block of a class that has fallen under it (gamma), the two shapes --check calls fold due and drift to none"
+else no "the fold on the gaps table  [exit $RC, gamma block $GAPSGAMMA, alpha usual $GAPSALPHA] $(printf '%s' "$FOLD4" | tr '\n' '|')"; fi
+# Under --format json stdout stays one parseable object and the fold's own line goes to stderr.
+cp "$FIGT/drift.json" "$FIGF/drift-json.json"
+FOLDJ=$("$PY" "$LANE" cost-figures --records "$FIGS" --routing "$FIGF/drift-json.json" --fold --format json 2>"$F/fold-json.err"); RC=$?
+FOLDJOK=$(printf '%s' "$FOLDJ" | "$PY" -c 'import json, sys; print(json.load(sys.stdin)["drift"])' 2>&1)
+if [ "$RC" = 0 ] && [ "$FOLDJOK" = True ] && grep -q 'wrote 1 class block' "$F/fold-json.err"; then
+  ok "cost-figures --fold --format json leaves stdout a parseable object and puts the fold's own line on stderr"
+else no "the fold broke the json stdout  [exit $RC, parsed $FOLDJOK, stderr $(head -1 "$F/fold-json.err")]"; fi
+# --check is unchanged by the flag's arrival: the same table, the same verdicts, still no write.
+CHKSUM=$(shasum "$FIGT/drift.json" | cut -d' ' -f1)
+FIGOUT=$(figures --routing "$FIGT/drift.json" --check 2>&1); RC=$?
+if [ "$RC" = 1 ] && has "$FIGOUT" 'drift (soft $5.00 → $5.00 · usual $0.60 → $0.50 · n 4 → 4)' \
+   && [ "$(shasum "$FIGT/drift.json" | cut -d' ' -f1)" = "$CHKSUM" ]; then
+  ok "cost-figures --check is unchanged beside --fold: the same drift, the same exit 1, and the table it read is byte-identical afterwards"
+else no "--check changed under --fold  [exit $RC, table changed $([ "$(shasum "$FIGT/drift.json" | cut -d' ' -f1)" = "$CHKSUM" ] && echo no || echo yes)] $(printf '%s' "$FIGOUT" | tr '\n' '|')"; fi
 
 # ----------------------------------------------------------- wrote nothing outside its own ---
 echo "== containment =="

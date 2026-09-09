@@ -327,8 +327,17 @@ demotions applied.
 ### 5 — Capture (into raw/)
 Fetch each APPROVED link (routed chain → Jina fallback; whole-chain failures and engine rot per
 the envelope and rationale). Write every page through `capture_write.py write` — the sole write
-path. For `--expand > 1`, repeat Steps 3–5 on the newly captured pages, re-previewing each hop
-(unless `--yes`).
+path. Then score every capture where it is written, the same line as ingest Step 0 3c:
+`python3 -B .claude/skills/ingest/conversion_score.py "raw/<path>.md"` — a capture carries
+`converted_by:`, so it is a conversion whatever its extension and is scored like one. One verdict
+line per capture with four measures and a `scope`; a web capture reads `scope: other` (a PDF, or an arXiv-HTML page taken through markitdown, reads `scope: pdf`), so a
+`suspect` here is carried into the run report under `Suspect conversions:` with its scope and
+measures (read the line: identifiers and product names fire it, real damage — lost tables, lost
+inter-word spaces — does too) and raises no `flagged:` line by itself; the page that later compiles
+the capture takes ingest 3c's decision. The verdict is reported, not written back into the capture:
+`capture_write.py` stays the sole write path (2026-09-08: two of the three damage admissions lint
+found sat on captures no check had ever scored). For `--expand > 1`, repeat Steps 3–5 on the newly
+captured pages, re-previewing each hop (unless `--yes`).
 ### 6 — Rounds (search mode, `--rounds > 1`)
 Per the rounds rationale: open gaps → the new facet list → re-enter Step 1, re-running
 `funnel_knobs.py` with `--ledger-id <run-id>` (the ledger supplies pages-captured; mismatch →

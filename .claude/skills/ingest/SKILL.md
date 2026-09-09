@@ -84,7 +84,10 @@ anything other than the default, and resolve an ambiguous phrase to the **narrow
 - A source in `raw/9-originals/` (the owner's own work) is **never below standard**.
 - A source that **corrects an existing wiki page is always research** — a correction has to be exact.
 - A source whose Step 0 check found **collapsed word boundaries can never be research** (verbatim
-  quoting is impossible on it): compile at standard and say so in the report.
+  quoting is impossible on it): compile at standard and say so in the report. The same holds for a
+  conversion the Step 0 scorer reads `suspect` in scope `pdf` (3c): the `flagged:` line it puts on the source
+  page is the record, and the depth line names that verdict as the reason. 3b and 3c never contradict —
+  either one raising the flag is enough, and a 3c `clean` never clears a 3b `COLLAPSED`.
 
 **Name the evidence, or drop a rung.** Every depth you record carries a locator — `research — T1 (Table 3
 ablation) · T2 (calibration, About Me)`, `concise — ¬T3 (link post, all three tools already have pages)`.
@@ -412,8 +415,8 @@ design (a missing file or unreadable dir must surface, never read as "no duplica
 
 - **Opt-out**: `--no-dedup` (or "skip dedup") skips this pre-flight for bulk all-new loads. On by default (cheap).
 
-### Step 0 — Normalize to Markdown (MarkItDown) — non-`.md` sources ONLY
-**If the source is already `.md`, SKIP this entire step — do NOT invoke MarkItDown.**
+### Step 0 — Normalize to Markdown (MarkItDown) — conversion for non-`.md` sources; the score (3c) for every file carrying `converted_by:`
+**If the source is already `.md`, SKIP the conversion (1–3b) — do NOT invoke MarkItDown — but still run 3c on it when its frontmatter carries `converted_by:`.** A gather, Jina or defuddle capture is a conversion whatever its extension, and the score keys on that observable, never on the extension (two of the three damage admissions the 2026-09-08 lint probe found sat on Jina captures no check had scored). A `.md` with no `converted_by:` takes no Step 0 at all.
 
 Otherwise (`.pdf`, `.pptx`, `.docx`, `.xlsx`, `.png`/`.jpg`, `.mp3`/`.wav`, `.html`, `.csv`, `.epub`,
 … or a YouTube/web URL):
@@ -421,6 +424,10 @@ Otherwise (`.pdf`, `.pptx`, `.docx`, `.xlsx`, `.png`/`.jpg`, `.mp3`/`.wav`, `.ht
 1. **Preflight the engine** (install once if missing — the console script is NOT on PATH here, so
    check *importability*, not `command -v`):
    `python3 -c "import markitdown" 2>/dev/null || pip3 install 'markitdown[all]'`
+   `pdftotext` is **optional** and serves 3c's recovery measure only: `command -v pdftotext || brew install poppler`
+   (macOS; the `poppler-utils` package elsewhere). Absent, or failing on a PDF, the scorer prints
+   `recovery n/a (pdftotext absent)` or `recovery n/a (pdftotext failed: <reason>)` and decides on its other
+   three measures — it never stalls a conversion on the binary.
 2. **Convert** (always use the module form — `python3 -m markitdown` — since the bare `markitdown`
    script isn't on PATH):
    - **Local file** → `python3 -m markitdown "<absolute path>" -o "raw/<stem>.md"`
@@ -442,6 +449,7 @@ Otherwise (`.pdf`, `.pptx`, `.docx`, `.xlsx`, `.png`/`.jpg`, `.mp3`/`.wav`, `.ht
    converted_from: <original filename or source URL>
    converted_by: markitdown
    converted_on: <YYYY-MM-DD>
+   conversion_score: <from 3c, e.g. short-lines 4.0 % · run-together 1.7 % · long-run 0.3 /1k · recovery 0.96 · clean · scope pdf>
    ---
    ```
    Then **sanitize the saved body** so it can never pollute the Obsidian graph (MarkItDown emits stray
@@ -451,7 +459,11 @@ Otherwise (`.pdf`, `.pptx`, `.docx`, `.xlsx`, `.png`/`.jpg`, `.mp3`/`.wav`, `.ht
    ```
    (Strips control bytes; defangs `[a,b](z)`→`a,b (z)` and `[[x]]`→`[ [x] ]`; keeps real `https://` links. `raw/` is also graph-excluded — see CLAUDE.md §12.)
    **Post-sanitise check (same pass, cheap):** keep a pre-image first (`cp "raw/<stem>.md" /tmp/` — perl edits in place), then compare `wc -c` and `grep -c ']('` before/after: bytes may fall only by the stripped control bytes, and the `](` count only by the intended bareword defangs — any other delta (a falling kept-link count above all) is a sanitiser defect: STOP, restore the pre-image, inspect. No pre-image (premise failure) → recompute the before-counts from the fetched source and say so. `--verbatim` captures skip sanitising, and this check with it. (Instantiates `wiki/developments/verification-discipline.md`; the 2026-08-23 capture-group clobber shipped `[]()` mangles for two months before an ad-hoc size check caught it — `wiki/developments/known-issues.md` §Closed.)
-3b. **Conversion-quality check (converted files only).** Some PDFs convert with the inter-word spaces
+3b. **Conversion-quality check (converted files only).** *3b and 3c never contradict: a `COLLAPSED` here is
+   authoritative on its own, a `suspect` from 3c (scope `pdf`) is authoritative on its own, and either one
+   raises the `flagged:` line on the source page — 3c's line records the four measures and names `3b COLLAPSED`
+   beside them when 3b fired, so the line says which check spoke; a 3c `clean` never clears a 3b `COLLAPSED`.
+   Probe (b) locates the damage.* Some PDFs convert with the inter-word spaces
    stripped, so the body reads `ProximalPolicyOptimizationAlgorithms…`. The text is still readable but
    has **no word boundaries to quote**, which silently defeats research depth's verbatim-quote contract
    and makes every word-count metric wrong. One arithmetic check, no LLM read:
@@ -504,6 +516,68 @@ Otherwise (`.pdf`, `.pptx`, `.docx`, `.xlsx`, `.png`/`.jpg`, `.mp3`/`.wav`, `.ht
    capture of an arXiv HTML page measuring 11 runs in 9,513 words. Probe (b) is read, never counted: on
    the same corpus a clean capture carried up to 8 flagged lines, all glyph padding or data-URI blobs,
    and a collapsed one as few as 8, so only (a) separates the two populations.)
+3c. **Conversion score — the scripted check (every file carrying `converted_by:`; register entry 2026-09-08).**
+   Its thresholds are derived from the vault's own 96-file distribution, never set by eye. Run it on every
+   conversion after the sanitiser and its post-check, and on every `.md` capture whose frontmatter carries
+   `converted_by:` — a gather or Jina capture included; the conversion steps are what a `.md` source skips,
+   never this score:
+   ```bash
+   python3 -B .claude/skills/ingest/conversion_score.py "raw/<stem>.md"
+   ```
+   One verdict line per file — `clean` or `suspect` — with four measures, the threshold each was judged
+   against, and a `scope`. **Short-line share:** non-blank body lines of one character or less over all
+   non-blank body lines (the structural collapse reads 94.4 % against a clean maximum of 20.7 %; threshold
+   > 57.57 %; the cut rests on one positive, PPO.md — the other collapsed file reads 0.0 % here and is caught
+   by the other three). **Run-together share:** Latin word tokens carrying an internal lower-to-upper case
+   join or more than 18 letters, over all Latin word tokens, with fenced code, angle-bracket tags (attributes
+   and their blobs included) and base64-shaped blobs excluded from both sides (the space-stripped conversions
+   read 5.3–52.6 % against a clean maximum of 3.50 % — a defuddle capture of an arXiv HTML page whose hits are
+   product names; next-worst clean 2.95 %; threshold > 4.41 %; `n/a` on a non-Latin-majority file, which has
+   no inter-word spaces to lose). Before the exclusions the worst clean file read 8.68 % on one
+   `<latexit sha1_base64="…">` line, and the 9.15 % cut that floor forced missed the SoK survey conversion at
+   5.3 %. **Long-run rate:** probe (a) above, as a measure — runs of 25+ Latin letters per 1,000 words, firing
+   at ten runs or more (the damaged conversions read 10.6–5,224 per 1,000 against a clean maximum of 2.48;
+   threshold > 6.56), so 3b's probe and 3c count the same thing and differ only in the cut (3b's 5 per 1,000 set by judgement, 3c's 6.56 derived); a file between the two cuts is 3b's `COLLAPSED`, and that stands. **Sentence
+   recovery** against `pdftotext` where a sibling PDF exists: the share of pdftotext sentences of six words or
+   more found in the conversion after whitespace normalisation (damaged conversions read 0.00–0.01 against a
+   clean minimum of 0.29; threshold < 0.15; `n/a` with no PDF, with `pdftotext` absent, or when it fails — the
+   reason prints and the verdict rests on the other three). Each threshold is the midpoint of the gap between
+   the worst known-clean file and the nearest known-damaged one beyond it — derived 2026-09-08 on
+   `raw/2-papers/`, 17 known-damaged files against 79 clean, 17 caught at zero false positives; the token
+   rule and the derivation are in the script's docstring, and `--derive DIR --positives FILE` reprints them.
+   Exit 0 = clean, 3 = suspect, 2 = a premise failure (an empty or unreadable file, a directory with no
+   `.md`): a premise failure is not a verdict — fix the premise and re-run.
+   - **Scope — where the thresholds hold.** They were derived on PDF conversions of papers, and every verdict
+     line says whether the file is inside that population: `scope: pdf` when `converted_from:` names a `.pdf`,
+     a `.pdf` sibling exists, or `converted_by:` is one of this skill's document-conversion routes
+     (`markitdown`, `agent`); `scope: other` for a defuddle, Jina, curl or gh capture of a web page. A
+     `suspect` in scope `other` goes into the Step 8 `Suspect conversions:` block with its scope and measures
+     and raises **no `flagged:` line by itself**: read the verdict line — API-docs captures fire the long-run
+     rate on `BetaMessageParam`-shaped identifiers, READMEs the share on product names — and flag it only
+     where the damage is real (on 2026-09-08, 9 of 301 non-paper captures read `suspect`, none of them damaged).
+   - Copy the four measures, the verdict and the scope into the provenance block's `conversion_score:` line
+     (the template in step 3), e.g.
+     `conversion_score: short-lines 4.0 % · run-together 1.7 % · long-run 0.3 /1k · recovery 0.96 · clean · scope pdf`. A source that arrived as `.md` (a gather capture) has no step-3 template of its own: its score stays in the run report and on the source page's `flagged:` line when suspect, and the raw file is never written back (raw immutability).
+   - **`suspect` in scope `pdf`, and 3b's `COLLAPSED`, are recorded in the flag channel, and only there.** The
+     source page (Step 3) carries one line,
+     `flagged: <YYYY-MM-DD> source conversion suspect — raw/<path>.md · short-lines N % · run-together N % · long-run N /1k · recovery N[ · 3b COLLAPSED]; verify quotations against the original`
+     — the 3c measures always, `3b COLLAPSED` appended when 3b fired, so the line says which check spoke;
+     never a prose note in the summary and never a `depth:` comment: deep-lint reads `flagged:` and nothing
+     else, and lint's `check_flag_admissions.py` reports a source page that admits damage in prose without a
+     conversion flag. The source **cannot be research** (the Depth override); a quotation from it is
+     paraphrase, or is checked against the original; and the Step 8 report lists it under `Suspect
+     conversions:` with its measures. Offer `--agent-convert` or another capture route if the owner wants it
+     quotable (`pdftotext` read 0.0 % run-together where MarkItDown read 10.4 % on the same PDF, 2026-09-08).
+   - **Terminal state — how a conversion flag ends.** The flag is removed when a repaired conversion — a
+     `raw/<path>-repair.md` beside the original, or a re-fetched conversion — scores `clean` here and joins the
+     page's `sources:`, and the page's `## Summary` ends with one dated Provenance sentence naming the repair
+     file and the quotation check:
+     `Provenance (YYYY-MM-DD): compiled from a damaged conversion (<what the scorer read>); repaired conversion raw/<path>-repair.md (<its verdict>); quotation check: n confirmed, m corrected, u unverifiable.`
+     That sentence admits the old damage by design, and `check_flag_admissions.py` counts an admission that
+     also names a `repaired conversion` under its `RESOLVED:` line, never as a finding. Removing the flag
+     without the repair, or rewriting the admission away, is not a resolution.
+   - `--thresholds SHORT,RUN,RECOVERY,LONGRUN` overrides the four for a scratch run (`-` keeps one, `off`
+     disables one) and is printed on the summary line; it is never the way to make a conversion pass.
 4. **Keep the original untouched.** The original and the converted `.md` are now a **pair**. For a
    URL source there is no local original — the converted `.md` is the only file; keep the URL in
    `converted_from`.
@@ -690,11 +764,17 @@ Confidence:
 - [[some-paper-slug]] — authoritative  (peer-reviewed)
 - [[Some Concept]] — medium
 - [[Some Entity]] — low  (single promo source)
+Suspect conversions:
+- raw/2-papers/some-paper.md — scope pdf · run-together 12.3 % · long-run 31.8 /1k · short-lines 1.0 % · recovery n/a → flagged: on its source page; standard depth
+- raw/4-webinfo/some-api-docs.md — scope other · long-run 8.7 /1k (identifiers in the prose) → read, not flagged
 Run: run-20260827-2330-a1 · 14 ledger events · closed
 Re-grade a depth or a confidence and I'll fix it.
 ```
 
-A depth cell with an empty locator is a defect — go back and name the evidence, or drop a rung. To
+`Suspect conversions:` lists every conversion the Step 0 scorer (3c) read `suspect`, with its scope and the
+measures from its verdict line, and says whether it was flagged (scope `pdf`, or a 3b `COLLAPSED`) or read and
+left unflagged (scope `other`); a run with none writes `Suspect conversions: none`, so the absence is a
+statement rather than a silence. A depth cell with an empty locator is a defect — go back and name the evidence, or drop a rung. To
 **re-grade a depth upward** later, re-run `/ingest --research <sorted path>`: the de-dup pre-flight
 recognises it as a deeper-depth request and takes the UPDATE path.
 

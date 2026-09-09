@@ -87,12 +87,23 @@ ordinary state of a new or reimaged machine, and what the script reports as
 `git clone https://github.com/<owner>/<repo>.git /path/to/<repo>`. §C is only for creating a repo that
 does not exist yet.
 
-**Push (vault → repo)** — you improved the framework locally and want to publish it:
+**Push (vault → repo)** — you improved the framework locally and want to publish it. One chain, never the steps by
+hand — a hand-typed chain committed past a failed gate (known-issues 2026-09-08). (§C's first publish is the one
+exception: no clone exists there yet, so there is nothing to pull, overlay or gate.)
 ```bash
-git -C /path/to/second-yourself pull --ff-only                              # never clobber remote edits
-bash .claude/skills/export-template/export_template.sh --push /path/to/second-yourself
-cd /path/to/second-yourself && git add -A && git diff       # review → commit → push
+bash .claude/skills/export-template/publish.sh --release <candidate> /path/to/second-yourself
+#   pull --ff-only → overlay → add -A → drift check → payload gate → release gate → throttle gate → recap,
+#   then STOPS: nothing committed, the recap in output/publish-recap.txt. Read it. Its last line is
+#   `recap-digest <digest>` — the fingerprint of that recap and of the staged tree it describes.
+bash .claude/skills/export-template/publish.sh --release <candidate> --publish "<your word>" --message "<message>" \
+     --approved <digest> /path/to/second-yourself    # only after you have read that recap
 ```
+The second run neither pulls nor overlays: `--approved` is what binds your word to the recap you read, so it re-gates
+the staged tree as it stands and exits 1 naming the first section that differs if the recap or that tree has moved
+since. `publish.sh` exits 0 at the recap or after the push, 1 when a gate refuses, 2 on a broken premise and 3 when a
+git step fails; nothing is committed on any non-zero exit, and a STOP leaves the clone staged and uncommitted
+(`git -C <repo> reset -q`). `export_template.sh --push` is the overlay step it runs, and stays usable on its own for an
+overlay with no publish.
 `--push` overlays vault-owned files (CLAUDE.md, MANUAL.md, `README.md`/`LICENSE.md` + `assets/`,
 `.claude/skills/**`, `.obsidian` config, `examples/seed`) **and** the build machinery from the skill's
 `payload/` (setup.sh, .gitignore, .gitattributes), leaving `.git/` untouched. (`--sync` is an alias.)

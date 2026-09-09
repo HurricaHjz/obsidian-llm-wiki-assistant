@@ -19,6 +19,23 @@ if [ ! -f "$WATCH" ]; then
   exit 2
 fi
 
+# The locale. A bracket expression carrying a multibyte glyph — `[✓✗●]` — is a set of single
+# BYTES outside a UTF-8 locale, so under `LANG` and `LC_ALL` unset every such leg read 0 rows
+# and the suite was red through no fault of the console. The suite therefore fixes its own
+# locale rather than the caller's shell: the first UTF-8 locale this host lists wins, and a
+# host that lists none is still covered, because every multibyte class in a leg below is
+# written as an alternation of whole glyphs (`(✓|✗|●)`), which matches the same byte sequences
+# under any locale. Leg LC01 is the must-still-pass case: the console run with the locale
+# emptied.
+for _loc in C.UTF-8 en_GB.UTF-8 en_US.UTF-8; do
+  if locale -a | grep -qx "$_loc"; then
+    LC_ALL="$_loc"
+    export LC_ALL
+    break
+  fi
+done
+unset _loc
+
 AIMYTH_WATCH_NOTIFY=0
 export AIMYTH_WATCH_NOTIFY
 T=$(mktemp -d)
@@ -92,7 +109,26 @@ PACK
 printf '# an empty pack (no item lines at all)\n\n## Resume prompt\n\nnothing here.\n' \
   > "$T/handoffs/empty-pack.md"
 
-python3 -B - "$T" "$WATCH" <<'PY_FIX'
+# Two pids the liveness legs need, and the fixture record needs with them, since the console
+# now probes the pid of every open lane. LIVE_PID is this suite's own shell: certainly alive
+# for as long as the suite runs, so a lane carrying it must still read `running`. REAPED_PID is
+# a child started, exited and reaped here: certainly gone, and reaped, so nothing is waiting on
+# it. Its one risk is pid recycling, and the premise guard below is the answer to it — the
+# probe must already read the pid as gone before any fixture is written.
+LIVE_PID=$$
+sh -c 'exit 0' &
+REAPED_PID=$!
+wait "$REAPED_PID"
+if kill -0 "$REAPED_PID" 2>"$T/reaped-probe.err"; then
+  printf 'PROBE FAILED: the reaped pid %s still answers kill -0 (recycled?)\n' "$REAPED_PID"
+  exit 2
+fi
+if ! kill -0 "$LIVE_PID" 2>"$T/live-probe.err"; then
+  printf 'PROBE FAILED: this shell (pid %s) does not answer its own kill -0\n' "$LIVE_PID"
+  exit 2
+fi
+
+python3 -B - "$T" "$WATCH" "$LIVE_PID" "$REAPED_PID" <<'PY_FIX'
 """Write the fixture record, the head transcript and the lane transcript.
 
 The record carries every event kind handsoff.py and lane.py write, plus the schema kinds no
@@ -110,6 +146,10 @@ import time
 from datetime import datetime, timedelta, timezone
 
 T, WATCH = sys.argv[1], sys.argv[2]
+# The console probes the recorded pid of every open lane, so an open fixture lane must carry a
+# pid that is really alive or it renders `✗ dead`: LIVE_PID is the suite shell's own, REAPED_PID
+# a child of it that has exited and been reaped.
+LIVE_PID, REAPED_PID = int(sys.argv[3]), int(sys.argv[4])
 spec = importlib.util.spec_from_file_location("watch_under_test", WATCH)
 watch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(watch)
@@ -182,7 +222,10 @@ events = [
        action="SIGTERM the process group"),
     ev(31, "lane-closed", lane="C-TWO", exit_class="stall", total_cost_usd=0.50, num_turns=5,
        **{"class": "critic"}, stall=True, session_id="lane-sid-2"),
-    ev(35, "lane-resumed", lane="C-TWO", session_id="lane-sid-2r", pid=2004, wrapper_pid=2005,
+    # The resumed lane is left running to the end of the fixture, so its pid must be alive or
+    # the console's liveness probe would rightly draw it dead: the suite's own shell it is.
+    ev(35, "lane-resumed", lane="C-TWO", session_id="lane-sid-2r", pid=LIVE_PID,
+       wrapper_pid=LIVE_PID,
        **{"class": "critic"}, resume_n=1, after_limit=True, age_s=240.0, budget_usd=8.0,
        mechanism="lane.py headless, model opus, effort max"),
     ev(40, "stop-condition", which="limit", lane="head", action="wait until the reset",
@@ -216,8 +259,9 @@ events = [
     ev(81, "lane-open", lane="V-THREE", **{"class": "verifier"}, model="fable", effort="high",
        cwd=HOMES["V-THREE"], session_id="lane-sid-3", budget_usd=6.0, projects_root=PROJECTS,
        reason="(b) breadth: a synthetic verifier"),
-    ev(81, "lane-spawned", lane="V-THREE", session_id="lane-sid-3", pid=2006, wrapper_pid=2007,
-       **{"class": "verifier"}),
+    # V-THREE never closes in this fixture: the same reason as C-TWO's resume above.
+    ev(81, "lane-spawned", lane="V-THREE", session_id="lane-sid-3", pid=LIVE_PID,
+       wrapper_pid=LIVE_PID, **{"class": "verifier"}),
     ev(85, "observation", phase="verify", what="PROBE FAILED: a planted premise failure",
        note="evidence: the fixture"),
     ev(86, "observation", phase="verify", what="a late plain note with no alerting word in it",
@@ -252,6 +296,10 @@ write_jsonl("run-stopped.jsonl", [dict(e, run="run-stopped") for e in events] + 
 # no limit wait anywhere: the negative for the hatched wait
 write_jsonl("run-nowait.jsonl", [dict(e, run="run-nowait") for e in events
                                  if e["event"] not in ("stop-condition", "head-resumed")])
+# a limit wait ended by a successor head with no head-resumed (2026-09-09): the wait must close
+# at the successor, never run to the end of the record
+write_jsonl("run-succwait.jsonl", [dict(e, run="run-succwait") for e in events
+                                   if e["event"] != "head-resumed"])
 # a record whose pack yields no items and which carries no gate event
 write_jsonl("run-noitems.jsonl", [
     dict(ev(0, "run-open", session="head-sid-1", handoff=os.path.join(T, "handoffs",
@@ -287,6 +335,40 @@ write_jsonl("run-plain-closed.jsonl", [dict(e, run="run-plain-closed") for e in 
             spend_src="sum of 2 lane-closed total_cost_usd",
             meter="none: a plain lane run names no head session to meter"),
          run="run-plain-closed")])
+# The liveness shape: four open lanes, no close event on any of them, differing only in the pids
+# their spawn recorded. L-DEAD carries a pid that has exited and been reaped — the lane killed by
+# hand, which writes no lane-closed and which the console drew as running for ever. L-LIVE carries
+# this suite's own shell. L-MIXED carries one gone pid and one live one: a wrapper that died with
+# its lane still working is NOT dead. L-NOPID's spawn names no pid at all, which is an absence and
+# never a death. The closed variant adds a run-close so the banner's counts by exit class can be
+# read.
+liveness_events = [
+    ev(0, "lane-open", lane="L-DEAD", **{"class": "builder"}, model="fable", effort="max",
+       cwd=HOMES["B-ONE"], session_id="live-sid-1", budget_usd=8.0, projects_root=PROJECTS,
+       reason="(a) independence: the lane killed by hand"),
+    ev(0, "lane-spawned", lane="L-DEAD", session_id="live-sid-1", pid=REAPED_PID,
+       wrapper_pid=REAPED_PID, **{"class": "builder"}),
+    ev(1, "lane-open", lane="L-LIVE", **{"class": "critic"}, model="opus", effort="max",
+       cwd=HOMES["C-TWO"], session_id="live-sid-2", budget_usd=6.0, projects_root=PROJECTS,
+       reason="(b) breadth: the lane still working"),
+    ev(1, "lane-spawned", lane="L-LIVE", session_id="live-sid-2", pid=LIVE_PID,
+       wrapper_pid=LIVE_PID, **{"class": "critic"}),
+    ev(2, "lane-open", lane="L-MIXED", **{"class": "verifier"}, model="fable", effort="high",
+       cwd=HOMES["V-THREE"], session_id="live-sid-3", budget_usd=4.0, projects_root=PROJECTS,
+       reason="(c) load: the wrapper gone, the lane working"),
+    ev(2, "lane-spawned", lane="L-MIXED", session_id="live-sid-3", pid=LIVE_PID,
+       wrapper_pid=REAPED_PID, **{"class": "verifier"}),
+    ev(3, "lane-open", lane="L-NOPID", **{"class": "builder"}, model="sonnet", effort="medium",
+       cwd=HOMES["B-ONE"], session_id="live-sid-4", budget_usd=2.0, projects_root=PROJECTS,
+       reason="(a) independence: a spawn line with no pid in it"),
+    ev(3, "lane-spawned", lane="L-NOPID", session_id="live-sid-4", **{"class": "builder"}),
+]
+write_jsonl("run-liveness.jsonl", [dict(e, run="run-liveness") for e in liveness_events])
+write_jsonl("run-liveness-closed.jsonl",
+            [dict(e, run="run-liveness-closed") for e in liveness_events]
+            + [dict(ev(9, "run-close", shape="plain-lane-run", lanes=4,
+                       meter="none: a plain lane run names no head session to meter"),
+                    run="run-liveness-closed")])
 # the plain record's own broken premise: no run-open AND no lane event
 write_jsonl("run-plain-empty.jsonl", [
     dict(ev(0, "observation", phase="", what="a record with neither a run-open nor a lane"),
@@ -684,6 +766,18 @@ case $nowaitrow in
   *) ok "a record with no limit stop draws no wait (the negative control)" ;;
 esac
 
+# ---------------------------------------------------------------- leg 5b: a wait ended by a successor (2026-09-09)
+run_watch --run run-succwait --once --plain > "$T/succwait.txt" 2>&1
+succrow=$(grep -E '^\│ head {3,}' "$T/succwait.txt")
+case $succrow in *"░"*) sw_wait=1 ;; *) sw_wait=0 ;; esac
+case $succrow in *"↻"*) sw_res=1 ;; *) sw_res=0 ;; esac
+case ${succrow##*↻} in *"░"*) sw_tail=1 ;; *) sw_tail=0 ;; esac
+if [ "$sw_wait" -eq 1 ] && [ "$sw_res" -eq 1 ] && [ "$sw_tail" -eq 0 ]; then
+  ok "a limit wait that ends with a successor head closes at the successor: no hatching after the last ↻"
+else
+  no "the wait ended by a successor runs to the end (wait=$sw_wait resume=$sw_res tail-hatch=$sw_tail): $succrow"
+fi
+
 # ---------------------------------------------------------------- leg 6: alerts
 python3 -B - "$WATCH" > "$T/alerts.txt" 2>&1 <<'PY_ALERT'
 import importlib.util
@@ -966,10 +1060,12 @@ if grep -q 'plain lane run · no run-open · lanes 3 · lanes \$3.75 (2 of 3 pri
 else
   no "PL03 the header's lanes and spend read: $(sed -n 2p "$T/plain.txt")"
 fi
-if [ "$(grep -cE '^│ [✓✗●] P-(ONE|TWO|THREE) ' "$T/plain.txt")" = "3" ]; then
+# The mark is matched as an alternation of whole glyphs, never a bracket class: see the locale
+# note at the top of this file.
+if [ "$(grep -cE '^│ (✓|✗|●) P-(ONE|TWO|THREE) ' "$T/plain.txt")" = "3" ]; then
   ok "PL04 the lanes panel draws one row per lane of the plain record"
 else
-  no "PL04 the lanes panel drew $(grep -cE '^│ [✓✗●] P-' "$T/plain.txt") of 3 rows"
+  no "PL04 the lanes panel drew $(grep -cE '^│ (✓|✗|●) P-' "$T/plain.txt") of 3 rows"
 fi
 if ! grep -q '├ items ' "$T/plain.txt" && ! grep -qE '^│ item[0-9]' "$T/plain.txt" &&
    grep -q '├ items ' "$T/vocab.txt"; then
@@ -977,7 +1073,7 @@ if ! grep -q '├ items ' "$T/plain.txt" && ! grep -qE '^│ item[0-9]' "$T/plai
 else
   no "PL05 the plain record drew an items panel or the control drew none"
 fi
-if grep -q '├ timeline ' "$T/plain.txt" && grep -qE '^│ P-ONE +[█✓]' "$T/plain.txt" &&
+if grep -q '├ timeline ' "$T/plain.txt" && grep -qE '^│ P-ONE +(█|✓)' "$T/plain.txt" &&
    ! grep -qE '^│ head +' "$T/plain.txt" && grep -qE '^│ head +' "$T/vocab.txt"; then
   ok "PL06 the timeline has the lane rows and no head row (the control has one)"
 else
@@ -987,6 +1083,75 @@ if grep -q '├ feed ' "$T/plain.txt" && grep -q 'RECORD  lane-closed P-TWO' "$T
   ok "PL07 the feed carries the record's lane events"
 else
   no "PL07 the feed is missing the plain record's lane events"
+fi
+
+# ------------------------------------------------- LV: an open lane whose processes have gone
+# The console probes the recorded pid of every open lane, so a lane killed by hand — which
+# writes no lane-closed at all — is drawn dead instead of running for ever. Each leg's control
+# is another lane of the SAME record, rendered by the same run of the same console: only the
+# pids differ between them, so a wrong verdict cannot be blamed on the fixture's shape.
+run_watch --run run-liveness --once --plain > "$T/liveness.txt" 2>"$T/liveness.err"
+lvrc=$?
+if [ "$lvrc" -eq 0 ] && ! grep -q 'PROBE FAILED' "$T/liveness.err"; then
+  ok "LV00 the liveness record renders (exit 0, no PROBE FAILED)"
+else
+  no "LV00 the liveness record exited $lvrc: $(head -2 "$T/liveness.err")"
+fi
+if [ "$(grep -cE '^│ ✗ L-DEAD .* dead · no close event' "$T/liveness.txt")" = "1" ]; then
+  ok "LV01 an open lane whose recorded processes have gone is drawn ✗ dead · no close event"
+else
+  no "LV01 the killed lane's row reads: $(grep -E '^│ . L-DEAD ' "$T/liveness.txt" | head -1)"
+fi
+if [ "$(grep -cE '^│ ● L-DEAD ' "$T/liveness.txt")" = "0" ]; then
+  ok "LV02 and it is not drawn ● running (the state the defect showed for ever)"
+else
+  no "LV02 the killed lane is still drawn running"
+fi
+if [ "$(grep -cE '^│ ● L-LIVE ' "$T/liveness.txt")" = "1" ]; then
+  ok "LV03 the clean case: a lane whose recorded pid is this suite's own shell still reads ● running"
+else
+  no "LV03 the live lane's row reads: $(grep -E '^│ . L-LIVE ' "$T/liveness.txt" | head -1)"
+fi
+if [ "$(grep -cE '^│ ● L-MIXED ' "$T/liveness.txt")" = "1" ]; then
+  ok "LV04 a lane with one gone pid and one live one still reads running (only all-gone is dead)"
+else
+  no "LV04 the mixed lane's row reads: $(grep -E '^│ . L-MIXED ' "$T/liveness.txt" | head -1)"
+fi
+if [ "$(grep -cE '^│ ● L-NOPID ' "$T/liveness.txt")" = "1" ]; then
+  ok "LV05 an open lane whose spawn recorded no pid stays running (an absence is not a death)"
+else
+  no "LV05 the pid-less lane's row reads: $(grep -E '^│ . L-NOPID ' "$T/liveness.txt" | head -1)"
+fi
+run_watch --run run-liveness-closed --once --plain > "$T/liveness-closed.txt" 2>&1
+if grep -q 'lanes 4: ' "$T/liveness-closed.txt" && grep -q '1 dead' "$T/liveness-closed.txt" &&
+   grep -q '3 running' "$T/liveness-closed.txt"; then
+  ok "LV06 the close banner counts the dead lane as dead: lanes 4, 3 running, 1 dead"
+else
+  no "LV06 the banner's counts read: $(grep -o 'lanes 4: .*' "$T/liveness-closed.txt" | head -1)"
+fi
+
+# LC01: the same snapshot with the locale emptied — LANG, LC_ALL and LC_CTYPE all unset, the
+# shell the defect was found from. The console must render the same three lane rows, and the
+# probe must still read them: both halves of the locale fix are under test here, the exported
+# LC_ALL above (which `env -u` removes for this leg) and the glyph alternation in the pattern.
+# The control is PL04 above: the same assertion on the same fixture under the suite's locale.
+env -u LANG -u LC_ALL -u LC_CTYPE LLM_WIKI_STORE="$T/store" AIMYTH_PROJECTS_DIR="$T/projects" \
+    AIMYTH_WATCH_NOTIFY=0 COLUMNS=150 LINES=60 \
+    python3 -B "$WATCH" --vault "$T/vault" --run run-plain --once --plain \
+    > "$T/plain-nolocale.txt" 2>"$T/plain-nolocale.err"
+lcrc=$?
+lcrows=$(grep -cE '^│ (✓|✗|●) P-(ONE|TWO|THREE) ' "$T/plain-nolocale.txt")
+if [ "$lcrc" -eq 0 ] && [ "$lcrows" = "3" ] && ! grep -q 'PROBE FAILED' "$T/plain-nolocale.err"; then
+  ok "LC01 the console renders its three lane rows with LANG, LC_ALL and LC_CTYPE unset (PL04 is the control)"
+else
+  no "LC01 under an emptied locale the console exited $lcrc and drew $lcrows of 3 lane rows"
+fi
+# LC02: the negative control for LC01's probe — the pattern is not matching everything. The
+# same grep over the same file with a lane name that is not in the record must read 0.
+if [ "$(grep -cE '^│ (✓|✗|●) P-(FOUR|FIVE) ' "$T/plain-nolocale.txt")" = "0" ]; then
+  ok "LC02 the same glyph-alternation probe reads 0 for a lane the record does not carry"
+else
+  no "LC02 the glyph-alternation probe matched a lane that is not in the record"
 fi
 PLREPORT="$T/store/spawn-records/run-plain-closed-timeline.txt"
 run_watch --run run-plain-closed --plain --refresh 0.2 < /dev/null > "$T/plain-closed.txt" 2>&1

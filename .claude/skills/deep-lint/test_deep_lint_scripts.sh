@@ -1111,11 +1111,59 @@ leg "25 a missing layer is a probe failure, not a zero (exit 2)" "$r"
 rc_a8=$(run a8.txt "$PY" "$AUDIT" --vault "$PV" --baseline 2027-01-01 --today 2026-09-02)
 r=""
 r="$r$(wantrc "$rc_a8" 0)"
-r="$r$(want "$OUT/a8.txt" 'pool A (changed, updated >= 2027-01-01): 0')"
+# A baseline after every page empties pool A of changed pages; the one flagged page is still
+# lifted into it (the stratum is defined by the flag, not the window — 2026-09-08), so the
+# pool reads 1 with the lift printed, and the control still passes.
+r="$r$(want "$OUT/a8.txt" 'pool A (changed, updated >= 2027-01-01): 1 · flagged lifted from below the baseline: 1')"
+r="$r$(want "$OUT/a8.txt" 'pool B (unchanged): 11')"
 r="$r$(want "$OUT/a8.txt" 'pool-control: baseline 2026-05-31 returns 12 of 12 classifiable eligible pages')"
-r="$r$(want "$OUT/a8.txt" 'changed: audited 0 of 0 —')"
+r="$r$(want "$OUT/a8.txt" 'changed: audited 1 of 1 — flagged 1 (Step 2)')"
 r="$r$(notwant "$OUT/a8.txt" 'PROBE FAILED')"
-leg "26 zero changed pages is a finding, not a failure, once the control passes" "$r"
+leg "26 zero changed pages is a finding, not a failure, once the control passes (the flagged page alone is lifted)" "$r"
+
+# ---------------------------------------------------------------- the flagged lift (2026-09-08)
+# The entry (wiki page writers): a flagged: write did not bump updated:, so a flagged page could
+# sit in deep-lint's cold tail unread. Every flagged page now sits in pool A whatever its date.
+# Fixture: the planted vault plus one flagged page dated before the baseline; it must appear
+# under FLAGGED, leave pool B, and the counts must say so.
+SV="$TMP/staleflag"; rm -rf "$SV"; cp -R "$PV" "$SV"
+w "$SV/wiki/sources/stale-flagged.md" <<'FIXTURE_END'
+---
+title: Stale Flagged
+type: source
+confidence: high
+flagged: 2026-06-15 source conversion suspect — run-together 12.3 %
+updated: 2026-06-15
+---
+
+## Summary
+A source page flagged long before the baseline, with no updated: bump.
+
+## Related
+- [[Planted Concept]] — an outbound link.
+FIXTURE_END
+rc_sf=$(run sf.txt "$PY" "$AUDIT" --vault "$SV" --baseline 2026-08-15 --today 2026-09-02)
+r=""
+r="$r$(wantrc "$rc_sf" 0)"
+r="$r$(want "$OUT/sf.txt" 'pool A (changed, updated >= 2026-08-15): 10 · flagged lifted from below the baseline: 1')"
+r="$r$(want "$OUT/sf.txt" 'pool B (unchanged): 3')"
+r="$r$(want "$OUT/sf.txt" 'flagged: 2 of 2 (Step 2 — no cap cost)')"
+r="$r$(want "$OUT/sf.txt" "$(printf 'FLAGGED\twiki/sources/stale-flagged.md · source · high · upd=2026-06-15')")"
+r="$r$(want "$OUT/sf.txt" "$(printf 'FLAGGED\twiki/sources/flagged-source.md')")"
+r="$r$(notwant "$OUT/sf.txt" "$(printf 'TAIL\twiki/sources/stale-flagged.md')")"
+r="$r$(want "$OUT/sf.txt" 'changed: audited 10 of 10 — flagged 2 (Step 2)')"
+leg "26b a flagged page older than the baseline is lifted into pool A under FLAGGED, never the tail, and the counts say so" "$r"
+rc_sfj=$(run sfj.txt "$PY" "$AUDIT" --vault "$SV" --baseline 2026-08-15 --today 2026-09-02 --format json)
+r=""
+r="$r$(wantrc "$rc_sfj" 0)"
+r="$r$(want "$OUT/sfj.txt" '"flagged_lifted": 1')"
+r="$r$(want "$OUT/sfj.txt" '"pool_a": 10')"
+leg "26c the JSON form carries the lifted count" "$r"
+rc_a9=$(run a9.txt "$PY" "$AUDIT" --vault "$PV" --baseline 2026-08-15 --today 2026-09-02)
+r=""
+r="$r$(want "$OUT/a9.txt" 'pool A (changed, updated >= 2026-08-15): 9')"
+r="$r$(notwant "$OUT/a9.txt" 'flagged lifted')"
+leg "26d control: with every flagged page inside the window nothing is lifted and the line is unchanged" "$r"
 
 # ---------------------------------------------------------------- malformed-input legs
 r=""

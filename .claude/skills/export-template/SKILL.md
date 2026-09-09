@@ -90,6 +90,15 @@ files and `payload/` always stay.
 ## Publish (push) — guided; the agent automates, you confirm
 When the user wants to publish/update the public repo (`/export-template publish`, "push the latest
 framework"), do it end-to-end but **pause once for confirmation before anything goes public**:
+**Run the chain, never its steps (2026-09-08).** `bash .claude/skills/export-template/publish.sh --release <candidate> <repo>`
+runs steps 1 and 2 as one `&&` chain — pull, overlay, stage, drift check, payload gate, release gate, throttle gate —
+prints the recap, writes it to `output/publish-recap.txt` and STOPS there with nothing committed. Its last line is
+`recap-digest <digest>`: the fingerprint of that recap and of the staged tree it describes, which step 4 hands back.
+Step 3 stays yours — the script never asks. Every failed step ends it non-zero (1 = a gate refused, 2 = a broken
+premise, 3 = a git step failed), so no gate can be passed over: a hand-chained publish committed past a failed payload
+gate (known-issues 2026-09-08). A STOP leaves the clone with the overlay staged and uncommitted
+(`git -C <repo> reset -q` clears the index). The numbered steps below are what it runs, and what to read when it stops.
+Suite: `test_publish_sh.sh`.
 1. **Pull-then-overlay:** `bash .claude/skills/export-template/export_template.sh --push <repo>`.
    First do `git -C <repo> pull --ff-only` (so you never clobber unpulled remote edits), then the overlay.
    (For the very first publish, do a fresh build + create the GitHub repo instead — RUNBOOK §C.)
@@ -105,6 +114,9 @@ framework"), do it end-to-end but **pause once for confirmation before anything 
    `vault-local` blocks, differ by design) and list any other difference with both mtimes. A difference means the
    vault changed after the overlay (a concurrent session edited a shipped file between overlay and commit on
    2026-09-06): re-overlay and re-gate, or name the exclusion in the recap. Never commit a tree you have not compared.
+   `publish.sh` makes this comparison itself and derives the by-design classes from `export_template.sh` — the paths
+   `apply_fixes()` rewrites and the conditional-compile marker whose blocks it strips — plus the files packaged from
+   the skill's `payload/`; it names every exemption in the recap and stops on anything else.
    **Payload gate (mandatory, before the recap, AFTER `git add -A`):**
    `python3 .claude/skills/export-template/publish_guard.py <repo>` must exit 0. It reads the
    staged tree from git's INDEX (the bytes a commit writes) and runs three probes: an absolute
@@ -150,7 +162,14 @@ framework"), do it end-to-end but **pause once for confirmation before anything 
    machine-local symlink rather than moving data, so the convention costs no migration.
 3. **Confirm — mandatory gate:** ask the user to approve and to give/confirm a commit message.
    **Never `commit` or `push` without an explicit "yes".**
-4. **Publish:** `git -C <repo> commit -m "<message>" && git -C <repo> push`
+4. **Publish:** hand that word back to the same script together with the digest the recap printed — the digest is what
+   binds the word to the recap the user actually saw:
+   `bash .claude/skills/export-template/publish.sh --release <candidate> --publish "<the user's word>" --message "<message>" --approved <digest> <repo>`.
+   That run does **not** pull or overlay again: it checks the recap on disk still digests to `<digest>` and that the
+   clone's index is still the tree that recap named, exits 1 naming the first section that differs (the index changed,
+   the recap was regenerated, the vault moved), re-runs the four gates read-only on that index, then commits and pushes
+   — so what ships is the tree the recap described. `--publish`, `--message` and `--approved` come as a set.
+   Never run `git commit` or `git push` for a publish by hand.
 5. **Report & log:** report the commit + push result + the repo URL, then append one `export` entry to
    `wiki/log.md` via shell (version, commit hash, what shipped). The publish event logs `export`; the
    framework edits it ships were already logged as `framework` when made — never log the push as a second
@@ -163,7 +182,9 @@ framework"), do it end-to-end but **pause once for confirmation before anything 
    vault up now: `git add -A && git commit -m "backup: YYYY-MM-DD (post <version> publish)" && git push`
    (owner identity, no AI attribution). Report the result in-reply; never ask for confirmation and
    never log it in `wiki/log.md`. If the vault has no git repo or remote, say so in one line and move
-   on — the backup must never block a publish.
+   on — the backup must never block a publish. It stays outside the publish chain: `publish.sh` writes only to the repo
+   clone and its own recap file, never to this vault's own repository. That recap is an ordinary file under `output/`:
+   unless this vault's `.gitignore` excludes that directory, this backup commits it, owner word included.
 
 ## Update (pull) — guided; preview → confirm → apply
 When the user wants to bring a newer framework from the repo into their vault ("pull the latest framework",

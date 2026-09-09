@@ -29,6 +29,7 @@ INDEX="$HOME_DIR/check-index.py"      # index consistency, formerly a hand compa
 PAL="$HOME_DIR/apply-palette.py"      # the one script here that writes, on request
 SHIP="$HOME_DIR/check-shipped-links.py"
 QMD="$HOME_DIR/check-qmd-registry.sh"
+FLAGS="$HOME_DIR/check_flag_admissions.py"   # a damage admission in prose with no flagged: key
 
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '    ok   — %s\n' "$1"; }
@@ -504,6 +505,7 @@ guard "check-shipped-links.py" python3 "$SHIP"  "$NOVAULT"
 guard "apply-palette.py"       python3 "$PAL"   --apply --vault "$NOVAULT"
 guard "check-qmd-registry.sh"  sh "$QMD" "$NOVAULT"
 guard "check-qmd-registry.sh (--vault form)" sh "$QMD" --vault "$NOVAULT"
+guard "check_flag_admissions.py" python3 "$FLAGS" --vault "$NOVAULT"
 # The positive control for the eight refusals above: the same scripts, on a real fixture vault,
 # on this same run. A guard that refused everything would pass the legs above and fail here.
 scans(){ local nm="$1" want="$2"; shift 2; local sout src
@@ -514,6 +516,7 @@ scans(){ local nm="$1" want="$2"; shift 2; local sout src
 scans "check-links.py"   0 python3 "$LINKS" --vault "$C"
 scans "check-orphans.py" 0 python3 "$ORPH"  --vault "$C"
 scans "check-index.py"   0 python3 "$INDEX" --vault "$C"
+scans "check_flag_admissions.py" 0 python3 "$FLAGS" --vault "$P"
 # apply-palette.py reads its palette from the root it is given, so its control needs a fixture
 # vault carrying one: --check then reports the missing groups and exits 1, which is the script
 # running, not refusing. Built apart from the three shared fixtures, whose manifests are frozen.
@@ -530,6 +533,7 @@ badflag "check-index.py"         python3 "$INDEX" --vault "$C" --deep
 badflag "apply-palette.py"       python3 "$PAL"   --check --vault "$C" --deep
 badflag "check-shipped-links.py" python3 "$SHIP"  "$C" --deep
 badflag "check-qmd-registry.sh"  sh "$QMD" "$C" wiki --deep
+badflag "check_flag_admissions.py" python3 "$FLAGS" --vault "$C" --deep
 LV="$(python3 "$LINKS" --vault "$C" 2>"$GERR")"; rc=$?
 LP="$(python3 "$LINKS" "$C" 2>>"$GERR")"
 if [ "$rc" = 0 ] && [ -n "$LV" ] && [ "$LV" = "$LP" ]
@@ -585,6 +589,73 @@ CP="$(printf '%s\n' "$CSRC" | sed -n 's/^SOURCES SCANNED: .*| \([0-9]*\) vault p
 if [ "$CD" = "1" ] && [ "$CP" -gt 0 ] && [ "$rc" = 0 ]
 then ok "a clean fixture reports 0 dangling sources with $CP paths resolved as its control"
 else no "a clean fixture reports 0 dangling sources with a non-zero path count  [$CD, paths $CP, exit $rc]"; fi
+
+printf '\n--- check-links.py · out-of-vault sources (register entry 2026-09-08) ---\n'
+# The entry: a sources: entry under ~ was reported dangling although the file existed — two
+# false positives per run, growing with every hands-off run report. A ~- or /-led entry is
+# provenance outside the vault: resolved with expanduser under a HOME the leg redirects into
+# the fixture, reported present or missing in its own bucket, never dangling.
+OFIX="$W/outside"; rm -rf "$OFIX"; rawbase "$OFIX"; mkdir -p "$OFIX/wiki/concepts" "$W/home/store/run-1" "$W/abs"
+printf -- 'a run report kept outside the vault\n' > "$W/home/store/run-1/report.md"
+printf -- 'an absolute-path provenance file\n' > "$W/abs/note.md"
+printf -- '---\ntitle: "Index"\ntype: index\nconfidence: high\n---\n## Concepts\n- [[TildePresent]] — a page.\n' > "$OFIX/wiki/index.md"
+printf -- '---\ntitle: "TildePresent"\ntype: concept\nconfidence: medium\nsources: ["~/store/run-1/report.md", raw/1-articles/a.md]\n---\n\n## Definition\nA tilde-led entry whose file exists under HOME.\n' > "$OFIX/wiki/concepts/TildePresent.md"
+printf -- '---\ntitle: "TildeMissing"\ntype: concept\nconfidence: medium\nsources: ["~/store/run-9/report.md"]\n---\n\n## Definition\nA tilde-led entry whose file does not exist.\n' > "$OFIX/wiki/concepts/TildeMissing.md"
+printf -- '---\ntitle: "AbsolutePresent"\ntype: concept\nconfidence: medium\nsources:\n  - "%s/abs/note.md"\n---\n\n## Definition\nAn absolute path outside the vault, block form.\n' "$W" > "$OFIX/wiki/concepts/AbsolutePresent.md"
+OOUT="$(env HOME="$W/home" python3 "$LINKS" --vault "$OFIX" 2>"$ERR")"; rc=$?
+oline(){ printf '%s\n' "$OOUT" | grep -c -- "$1"; }
+eq "a ~-led entry whose file exists is present, never dangling (the 2026-09-08 false positive)" "1" "$(oline 'DANGLING SOURCES: 0')"
+eq "present and missing out-of-vault entries are counted in their own bucket" "1" "$(oline '^OUT-OF-VAULT SOURCES: 2 present | 1 missing')"
+eq "the missing one names the page and the path under its own label" "1" "$(oline '^  (out-of-vault missing) wiki/concepts/TildeMissing.md · ~/store/run-9/report.md')"
+eq "no out-of-vault entry is counted as a vault path" "1" "$(printf '%s\n' "$OOUT" | sed -n 's/^SOURCES SCANNED: .*| \([0-9]*\) vault paths resolved.*/\1/p')"
+eq "the scan line carries the out-of-vault total" "1" "$(oline '| 3 out-of-vault ')"
+if [ "$rc" = 1 ]; then ok "a genuinely missing out-of-vault source is a finding (exit 1)"
+else no "a genuinely missing out-of-vault source is a finding  [exit $rc]"; fi
+rm "$OFIX/wiki/concepts/TildeMissing.md"
+OOUT="$(env HOME="$W/home" python3 "$LINKS" --vault "$OFIX" 2>"$ERR")"; rc=$?
+eq "control: with the missing entry gone the same fixture is clean (exit 0, 2 present)" "0-1" "$rc-$(oline '^OUT-OF-VAULT SOURCES: 2 present | 0 missing')"
+OOUT="$(env HOME="$W/no-such-home" python3 "$LINKS" --vault "$OFIX" 2>"$ERR")"; rc=$?
+eq "negative control: under another HOME the ~ entry is missing, still never dangling" "1-1-1" "$rc-$(oline '^OUT-OF-VAULT SOURCES: 1 present | 1 missing')-$(oline 'DANGLING SOURCES: 0')"
+
+printf '\n--- check_flag_admissions.py (register entry 2026-09-08, ingest Step 0 conversions) ---\n'
+# The entry: 14 source pages recorded a damaged conversion in prose or a frontmatter comment
+# and only 5 raised a flagged: line, so deep-lint's flag channel never saw the other 9. The
+# probe keys on the damage vocabulary, never on a named file, and only under wiki/sources/.
+AFIX="$W/admissions"; rm -rf "$AFIX"; rawbase "$AFIX"; mkdir -p "$AFIX/wiki/sources" "$AFIX/wiki/concepts"
+printf -- '---\ntitle: "Index"\ntype: index\nconfidence: high\n---\n## Sources\n- [[admits]] — a page.\n' > "$AFIX/wiki/index.md"
+printf -- '---\ntitle: "admits"\ntype: source\nconfidence: medium\nsources: [raw/2-papers/paper.md]\n---\n\n## Summary\nThe markitdown conversion collapsed inter-word spaces in the running prose, so quotations are paraphrased.\n' > "$AFIX/wiki/sources/admits.md"
+printf -- '---\ntitle: "admits-in-comment"\ntype: source\nconfidence: medium\ndepth: standard # run-together conversion, verbatim quoting impossible\nsources: [raw/2-papers/paper.md]\n---\n\n## Summary\nThe body says nothing about the conversion.\n' > "$AFIX/wiki/sources/admits-in-comment.md"
+printf -- '---\ntitle: "admits-unavailable"\ntype: source\nconfidence: medium\nsources: [raw/2-papers/paper.md]\n---\n\n## Summary\nA verbatim quotation is unavailable for this source.\n' > "$AFIX/wiki/sources/admits-unavailable.md"
+printf -- '---\ntitle: "flagged-admits"\ntype: source\nconfidence: medium\nflagged: 2026-09-08 source conversion suspect — raw/2-papers/paper.md · run-together 12.3 %%\nsources: [raw/2-papers/paper.md]\n---\n\n## Summary\nThe conversion collapsed inter-word spaces; the flag above carries it.\n' > "$AFIX/wiki/sources/flagged-admits.md"
+printf -- '---\ntitle: "clean-source"\ntype: source\nconfidence: medium\nsources: [raw/2-papers/only.md]\n---\n\n## Summary\nNothing about the conversion is admitted here.\n' > "$AFIX/wiki/sources/clean-source.md"
+printf -- '---\ntitle: "OutsideScope"\ntype: concept\nconfidence: medium\nsources: [raw/1-articles/a.md]\n---\n\n## Definition\nA concept page whose prose says the columns collapsed — not a source page, not scanned.\n' > "$AFIX/wiki/concepts/OutsideScope.md"
+# the fold of 2026-09-08 (critic L10, M5): a flag about something else no longer masks an admission;
+# the new vocabulary catches a lost chart; a Provenance sentence naming a repaired conversion is the
+# terminal state, counted as resolved and never a finding
+printf -- '---\ntitle: "other-flag"\ntype: source\nconfidence: medium\nflagged: 2026-09-01 stale pricing table, re-read\nsources: [raw/2-papers/paper.md]\n---\n\n## Summary\nThe two-column layout collapsed in conversion, so the table is paraphrased.\n' > "$AFIX/wiki/sources/other-flag.md"
+printf -- '---\ntitle: "charts"\ntype: source\nconfidence: medium\nsources: [raw/1-articles/a.md]\n---\n\n## Summary\nThe capture lost every chart on the page; the numbers below come from the prose.\n' > "$AFIX/wiki/sources/charts.md"
+printf -- '---\ntitle: "resolved"\ntype: source\nconfidence: medium\nsources: [raw/2-papers/paper.md, raw/2-papers/only.md]\n---\n\n## Summary\nA page whose conversion was repaired.\nProvenance (2026-09-08): compiled from a damaged conversion (run-together prose); repaired conversion `raw/2-papers/only.md` (clean); quotation check: 3 confirmed, 1 corrected, 0 unverifiable.\n' > "$AFIX/wiki/sources/resolved.md"
+FOUT="$(python3 "$FLAGS" --vault "$AFIX" 2>"$ERR")"; rc=$?
+fline(){ printf '%s\n' "$FOUT" | grep -c -- "$1"; }
+eq "a source page admitting damage in prose with no flagged: key is a finding (exit 1)" "1" "$rc"
+eq "  the prose admission is listed with its line and term" "1" "$(fline '^  wiki/sources/admits.md:9 · collapsed · The markitdown conversion collapsed inter-word spaces')"
+eq "  an admission inside a frontmatter comment is caught too" "1" "$(fline '^  wiki/sources/admits-in-comment.md:5 · run-together · depth: standard # run-together conversion')"
+eq "  the unavailable-quotation phrase is caught" "1" "$(fline '^  wiki/sources/admits-unavailable.md:9 · verbatim quotation is unavailable ·')"
+eq "  the same admission on a page carrying a conversion flagged: is not a finding (the negative)" "0" "$(fline 'flagged-admits')"
+eq "  a flagged: line about something else does NOT mask the admission (keyed on the flag's own text)" "1" "$(fline '^  wiki/sources/other-flag.md:10 · collapsed · The two-column layout collapsed in conversion')"
+eq "  the vocabulary catches a lost chart" "1" "$(fline '^  wiki/sources/charts.md:9 · lost every chart · ')"
+eq "  a Provenance sentence naming a repaired conversion is resolved, listed under its own line, not a finding" "1-1-0" "$(fline '^RESOLVED: 1 line(s) on 1 page(s) — an admission that also names a repaired conversion')-$(fline '^  wiki/sources/resolved.md:10 · run-together · Provenance (2026-09-08): compiled from a damaged conversion')-$(printf '%s\n' "$FOUT" | sed -n '/^ADMISSIONS WITHOUT FLAG/,$p' | grep -c 'resolved.md')"
+eq "  a concept page is outside the scan (wiki/sources/ only)" "0" "$(fline 'OutsideScope')"
+eq "  the count line: 8 pages scanned, 2 flagged (1 conversion), 7 matching the vocabulary" "1" "$(fline '^SCANNED: 8 pages under wiki/sources/ | 2 carry flagged: (1 conversion) | 7 match the damage vocabulary')"
+eq "  the findings total" "1" "$(fline '^ADMISSIONS WITHOUT FLAG: 5$')"
+eq "  the in-memory controls print: caught, conversion flag not a finding, other flag caught, repaired conversion resolved" "1" "$(fline '^CONTROL: in-memory page admitting damage without flagged: -> caught (2 term(s): collapsed, run-together); with a conversion flagged: -> not a finding; with a non-conversion flagged: -> caught; its admission rewritten as a Provenance sentence naming a repaired conversion -> resolved')"
+rm "$AFIX/wiki/sources/admits.md" "$AFIX/wiki/sources/admits-in-comment.md" "$AFIX/wiki/sources/admits-unavailable.md" "$AFIX/wiki/sources/other-flag.md" "$AFIX/wiki/sources/charts.md"
+FOUT="$(python3 "$FLAGS" --vault "$AFIX" 2>"$ERR")"; rc=$?
+eq "control: the flagged, clean and resolved pages alone report zero findings, exit 0, control still caught" "0-1-1" "$rc-$(fline '^ADMISSIONS WITHOUT FLAG: 0$')-$(fline '^CONTROL: .*-> caught')"
+eq "  with the scan total as its control, the resolved page still counted" "1-1" "$(fline '^SCANNED: 3 pages under wiki/sources/ | 1 carry flagged: (1 conversion) | 2 match the damage vocabulary')-$(fline '^RESOLVED: 1 line(s) on 1 page(s)')"
+rm -rf "$AFIX/wiki/sources"
+FOUT="$(python3 "$FLAGS" --vault "$AFIX" 2>"$ERR")"; rc=$?
+eq "no wiki/sources/ is a premise failure (exit 2, PROBE FAILED on stderr, no stdout)" "2--1" "$rc-$FOUT-$(grep -c 'PROBE FAILED: .*wiki/sources does not exist' "$ERR")"
 
 printf '\n--- check-index.py (register entry 2026-09-02) ---\n'
 # The entry: every other lint check is a script and Step 1 was still a Read plus a glob plus a
@@ -668,12 +739,14 @@ python3 "$INDEX" --vault "$RE_" > /dev/null; r12=$?
 # check-links.py reports findings with exit 1, so its own leg reads "the probe ran" as 0 or 1.
 python3 "$LINKS" --vault "$RO" > /dev/null; rl1=$?
 python3 "$LINKS" --vault "$RE_" > /dev/null; rl2=$?
+python3 "$FLAGS" --vault "$RO" > /dev/null; r13=$?
+python3 "$FLAGS" --vault "$RE_" > /dev/null; r14=$?
 chmod -R u+w "$RO" "$RE_"
 AFTER_F="$(manifest "$RO")$(manifest "$RE_")"
 END_H="$(manifest "$HOME_DIR")"; END_FIX="$(manifest "$P")$(manifest "$C")$(manifest "$E")"
-if [ "$r1$r2$r3$r4$r5$r6$r7$r8$r9$r10$r11$r12" = "000000000000" ] && [ "$rl1" -le 1 ] && [ "$rl2" -le 1 ]
+if [ "$r1$r2$r3$r4$r5$r6$r7$r8$r9$r10$r11$r12$r13$r14" = "00000000000000" ] && [ "$rl1" -le 1 ] && [ "$rl2" -le 1 ]
 then ok "every script and flag runs clean against a chmod -R a-w vault copy"
-else no "every script and flag runs clean against a read-only copy  [exits $r1 $r2 $r3 $r4 $r5 $r6 $r7 $r8 $r9 $r10 $r11 $r12, links $rl1 $rl2]"; fi
+else no "every script and flag runs clean against a read-only copy  [exits $r1 $r2 $r3 $r4 $r5 $r6 $r7 $r8 $r9 $r10 $r11 $r12 $r13 $r14, links $rl1 $rl2]"; fi
 if [ "$(hashes "$AFTER_F")" -ge 10 ] && [ "$BEFORE_F" = "$AFTER_F" ]; then ok "the read-only fixtures' checksum manifest is unchanged after every run"
 else no "the read-only fixtures' checksum manifest is unchanged  [$(hashes "$BEFORE_F") before, $(hashes "$AFTER_F") after]"; fi
 # The whole-run comparison: these baselines predate the first invocation in this file.
@@ -697,11 +770,11 @@ for pat in 'open\([^)]*["'"'"'][wax]' 'write_text' 'write_bytes' 'os\.remove' 'o
            'os\.rename' 'os\.replace' 'os\.mkdir' 'os\.rmdir' 'makedirs' 'shutil\.' \
            'subprocess' 'tempfile' 'pathlib' 'io\.open' 'os\.open' 'os\.fdopen' \
            'os\.system' 'os\.popen' 'print\(.*file=open'; do
-  hits=$((hits + $(npat "$pat" "$ORPH" "$TIER" "$ANOM" "$INDEX" "$LINKS")))
+  hits=$((hits + $(npat "$pat" "$ORPH" "$TIER" "$ANOM" "$INDEX" "$LINKS" "$FLAGS")))
   if [ "$(printf '%s\n' "$CTL_LINES" | npat "$pat" -)" -eq 0 ]; then dead="$dead $pat"; fi
 done
 if [ -n "$dead" ]; then no "every write pattern matches its own control line  [dead:$dead]"
-elif [ "$hits" -eq 0 ]; then ok "no write pattern appears in any script source (20 patterns over five scripts, each matched on its own control line)"
+elif [ "$hits" -eq 0 ]; then ok "no write pattern appears in any script source (20 patterns over six scripts, each matched on its own control line)"
 else no "no write pattern appears in any script source  [$hits hit(s)]"; fi
 # apply-palette.py is the one script here that writes, and only on request: it is excluded from
 # the grep above by design, so this leg keys on the property that still has to hold — a REFUSED

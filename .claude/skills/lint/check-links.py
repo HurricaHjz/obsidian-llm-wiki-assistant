@@ -16,6 +16,10 @@ identical rules instead of re-deriving an ad-hoc scanner. Rules encoded here:
     reported separately as dead embeds when missing — they are checked, not skipped;
   - frontmatter `sources:` entries that name a vault path are resolved against disk and
     reported separately as DANGLING SOURCES (provenance is a reference, not only prose);
+  - a `sources:` entry led by `~` or `/` is OUT-OF-VAULT provenance (a run store, a home
+    directory): it is resolved with expanduser and reported as present or as missing in
+    its own bucket, never as dangling (known-issues 2026-09-08: two false positives per
+    run, and the class grows with every hands-off run report). A missing one is a finding;
   - prints scan totals as its own positive control (a zero-findings run with zero links
     scanned is a broken probe, per CLAUDE.md §11);
   - refuses a root that is not a vault (no raw/ + wiki/): PROBE FAILED on stderr, exit 2.
@@ -113,8 +117,11 @@ for _dir, _subdirs, _names in os.walk(root):
 #   url        a scheme form — never resolved against disk                              (54)
 #   annotated  the entry itself declares the file gone: "path (deleted 2026-08-13)"      (2)
 #   prose      provenance written as prose: "email: …", "session: …", "20 Aug 2026"     (10)
+#   outside    led by "~" or "/": provenance outside the vault, resolved with expanduser
+#              and reported present or missing in its own bucket, never dangling (2026-09-08)
 #   path       contains "/" (1,177) or ends in a file extension, e.g. CLAUDE.md          (18)
-# Only `path` entries are resolved; everything else is counted so a zero is auditable.
+# Only `path` and `outside` entries are resolved; everything else is counted so a zero is
+# auditable.
 URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
 PROSE_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z ]{0,20}:\s")
 EXT_RE = re.compile(r"\.[A-Za-z0-9]{1,8}$")
@@ -167,7 +174,7 @@ def frontmatter_sources(block):
 
 
 def classify_source(entry):
-    """Return (kind, cleaned) for one entry; kind is url · annotated · prose · path."""
+    """Return (kind, cleaned) for one entry; kind is url · annotated · prose · outside · path."""
     text = entry.strip()
     if len(text) > 1 and text[0] == text[-1] and text[0] in "\"'":
         text = text[1:-1].strip()
@@ -179,6 +186,8 @@ def classify_source(entry):
         return "url", text
     if ANNOTATED_RE.search(text):
         return "annotated", text
+    if text[0] in "~/":
+        return "outside", text
     if PROSE_KEY_RE.match(text):
         return "prose", text
     if "/" in text or EXT_RE.search(text):
@@ -189,6 +198,7 @@ def classify_source(entry):
 source_pages = source_entries = 0
 source_paths = source_urls = source_prose = 0
 dangling_sources, annotated_sources, unparsed_sources = [], [], []
+outside_present, outside_missing = [], []
 
 aliases = {}
 for p in files:
@@ -212,6 +222,13 @@ for p in files:
                 source_prose += 1
             elif kind == "annotated":
                 annotated_sources.append(f"{rel_page} · {value}")
+            elif kind == "outside":
+                # A `~`- or `/`-led entry lives outside the vault: resolve it where it says it
+                # is. Present or missing, it is never a dangling VAULT path.
+                if os.path.exists(os.path.expanduser(value)):
+                    outside_present.append(f"{rel_page} · {value}")
+                else:
+                    outside_missing.append(f"{rel_page} · {value}")
             else:
                 source_paths += 1
                 if not os.path.exists(os.path.join(root, value)):
@@ -286,7 +303,8 @@ for d in dead_embeds:
     print("  " + d)
 print(f"SOURCES SCANNED: {source_pages} pages carry sources: | {source_entries} entries "
       f"| {source_paths} vault paths resolved | {source_urls} URLs | {source_prose} prose "
-      f"| {len(annotated_sources)} annotated absences | {len(unparsed_sources)} empty or unparsed"
+      f"| {len(annotated_sources)} annotated absences | {len(unparsed_sources)} empty or unparsed "
+      f"| {len(outside_present) + len(outside_missing)} out-of-vault"
       "   (nonzero totals = the sources arm ran)")
 print(f"DANGLING SOURCES: {len(dangling_sources)}")
 for d in dangling_sources:
@@ -296,4 +314,10 @@ for d in dangling_sources:
 for label, items in (("annotated absence", annotated_sources), ("empty or unparsed sources", unparsed_sources)):
     for d in items:
         print(f"  ({label}) {d}")
-sys.exit(1 if (dead_links or dead_embeds or dangling_sources) else 0)
+# Out-of-vault provenance (`~`- or `/`-led) is resolved where it points, with expanduser.
+# A present entry is information; a missing one is a finding in its own bucket, never a
+# dangling vault path.
+print(f"OUT-OF-VAULT SOURCES: {len(outside_present)} present | {len(outside_missing)} missing")
+for d in outside_missing:
+    print(f"  (out-of-vault missing) {d}")
+sys.exit(1 if (dead_links or dead_embeds or dangling_sources or outside_missing) else 0)

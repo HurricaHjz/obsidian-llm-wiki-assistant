@@ -16,6 +16,11 @@ set -uo pipefail
 
 SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD="$SKILL/publish_guard.py"
+# The two cases below call the guard with NO --vault, so it derives one three directories above
+# itself: a vault only where this skill sits in one. From a staged copy that derivation lands
+# outside any vault and the case fails on a premise it never meant to test, so VAULT_DIR names it —
+# defaulting to the same three-up path, the escape test_handsoff.sh's HOOKS_DIR is.
+VAULT_DIR=${VAULT_DIR:-$(cd "$SKILL/../../.." && pwd)}
 ROOT="${TMPDIR:-/tmp}/pgtest.$$"
 GIT="git -c user.email=t@t -c user.name=test -c commit.gpgsign=false -c init.defaultBranch=main"
 
@@ -251,7 +256,7 @@ B="$R/inner-build"; make_payload "$B"
 expect "$B" 0 "no git index" "a build directory INSIDE a repo is scanned as a tree, not via the outer index"
 PY3="$(command -v python3)"
 if [ -n "$PY3" ]; then
-  OUT="$(env PATH="" "$PY3" "$GUARD" "$R" 2>&1)"; RC=$?
+  OUT="$(env PATH="" "$PY3" "$GUARD" --vault "$VAULT_DIR" "$R" 2>&1)"; RC=$?
   if [ "$RC" = 2 ] && printf '%s' "$OUT" | grep -q "PROBE FAILED"; then
     ok "a repo whose git cannot run is a broken premise, never a silent disk fallback"
   else no "a repo whose git cannot run is a broken premise (exit $RC): $(echo "$OUT" | head -2)"; fi
@@ -265,11 +270,11 @@ for i in range(1500): open("%s/f%04d.md" % (d, i), "w").write("# page %d\n" % i)
   ( cd "$BIG" && $GIT init -q . && $GIT add -A ) >/dev/null 2>&1
   OUT="$("$PY3" -c 'import subprocess,sys
 try:
-    p = subprocess.run([sys.executable, sys.argv[1], sys.argv[2]], timeout=90,
+    p = subprocess.run([sys.executable] + sys.argv[1:], timeout=90,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     sys.stdout.write(p.stdout.decode()); sys.exit(p.returncode)
 except subprocess.TimeoutExpired:
-    print("TIMED OUT"); sys.exit(9)' "$GUARD" "$BIG" 2>&1)"; RC=$?
+    print("TIMED OUT"); sys.exit(9)' "$GUARD" "$BIG" --vault "$VAULT_DIR" 2>&1)"; RC=$?
   if [ "$RC" = 0 ] && printf '%s' "$OUT" | grep -q "check: clean"; then
     ok "a 1500-file staged payload scans without deadlocking on cat-file's pipes"
   else no "a 1500-file staged payload scans without deadlocking (exit $RC): $(echo "$OUT" | head -2)"; fi
